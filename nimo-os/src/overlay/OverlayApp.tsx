@@ -10,47 +10,50 @@
  * cursor touches it and click-through again when the cursor leaves.
  */
 
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Mic, MicOff, LayoutDashboard, Send, Lock, Unlock, X, CheckCircle2, XCircle, Radio, VolumeX } from 'lucide-react'
 import FloatingBlob from '../components/FloatingBlob'
 import { useNimoAgent } from '../hooks/useNimoAgent'
 import type { FaceState } from '../types'
 
-// Cloud lobes: circle CENTERS on a fixed 300×170 perimeter, spaced so
-// adjacent lobes always overlap → one merged scalloped silhouette with a
-// unified outline (two layers: navy rim circle behind each fill circle),
-// matching the reference thought-cloud. Two outlined dots trail bottom-left.
-const CLOUD_LOBES: Array<{ cx: number; cy: number; size: number }> = [
-  // top edge
-  { cx: 30, cy: 22, size: 46 },
-  { cx: 72, cy: 16, size: 54 },
-  { cx: 116, cy: 14, size: 56 },
-  { cx: 160, cy: 16, size: 54 },
-  { cx: 204, cy: 16, size: 54 },
-  { cx: 246, cy: 20, size: 48 },
-  { cx: 274, cy: 32, size: 42 },
-  // right edge
-  { cx: 282, cy: 66, size: 44 },
-  { cx: 284, cy: 104, size: 46 },
-  { cx: 276, cy: 140, size: 44 },
-  // bottom edge
-  { cx: 244, cy: 152, size: 46 },
-  { cx: 202, cy: 156, size: 50 },
-  { cx: 158, cy: 158, size: 52 },
-  { cx: 114, cy: 156, size: 50 },
-  { cx: 70, cy: 152, size: 46 },
-  // left edge
-  { cx: 30, cy: 144, size: 44 },
-  { cx: 18, cy: 106, size: 46 },
-  { cx: 16, cy: 66, size: 46 }
-]
+// Build the cloud lobe centers around a w×h box (centers on its edge):
+// a perimeter walk of the rounded rectangle with lobes every ~30px, so
+// adjacent lobes always overlap into one scalloped silhouette.
+function buildCloudLobes(w: number, h: number): Array<{ dx: number; dy: number }> {
+  const r = 20 // lobe radius
+  const corner = 24
+  const step = 30
+  const pts: Array<{ dx: number; dy: number }> = []
+  const hw = w / 2 - corner
+  const hh = h / 2 - corner
+  const straight = (x0: number, y0: number, x1: number, y1: number) => {
+    const len = Math.hypot(x1 - x0, y1 - y0)
+    const n = Math.max(1, Math.round(len / step))
+    for (let i = 0; i <= n; i++) pts.push({ dx: x0 + ((x1 - x0) * i) / n, dy: y0 + ((y1 - y0) * i) / n })
+  }
+  const arc = (cx: number, cy: number, a0: number, a1: number) => {
+    const n = Math.max(2, Math.round((Math.abs(a1 - a0) * corner) / step))
+    for (let i = 0; i <= n; i++) {
+      const a = a0 + ((a1 - a0) * i) / n
+      pts.push({ dx: cx + corner * Math.cos(a), dy: cy + corner * Math.sin(a) })
+    }
+  }
+  straight(-hw, -h / 2, hw, -h / 2)
+  arc(hw, -hh, -Math.PI / 2, 0)
+  straight(w / 2, -hh, w / 2, hh)
+  arc(hw, hh, 0, Math.PI / 2)
+  straight(hw, h / 2, -hw, h / 2)
+  arc(-hw, hh, Math.PI / 2, Math.PI)
+  straight(-w / 2, hh, -w / 2, -hh)
+  arc(-hw, -hh, Math.PI, Math.PI * 1.5)
+  return pts
+}
 
-// Trailing thought dots (bottom-left, outlined like the cloud).
-const CLOUD_DOTS: Array<{ cx: number; cy: number; size: number }> = [
-  { cx: 34, cy: 178, size: 22 },
-  { cx: 12, cy: 196, size: 13 }
-]
+/** calc(50% +/- Npx) — CSS calc can't take a unary minus after '+'. */
+function edge(base: string, d: number): string {
+  return `calc(${base} ${d >= 0 ? '+' : '-'} ${Math.abs(d)}px)`
+}
 
 export default function OverlayApp() {
   const {
@@ -60,7 +63,26 @@ export default function OverlayApp() {
     silentMode, setSilentMode, mouse
   } = useNimoAgent({ autoVoice: true, sessionId: 'companion' })
 
+  // The cloud measures itself from the text well and grows/shrinks with it.
   const [draft, setDraft] = useState('')
+  const cloudWellRef = useRef<HTMLDivElement>(null)
+  const [cloudSize, setCloudSize] = useState({ w: 130, h: 74 })
+  useEffect(() => {
+    const el = cloudWellRef.current
+    if (!el || !caption) return
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect()
+      if (r.width > 20) setCloudSize({ w: r.width, h: r.height })
+    })
+    ro.observe(el)
+    const r = el.getBoundingClientRect()
+    if (r.width > 20) setCloudSize({ w: r.width, h: r.height })
+    return () => ro.disconnect()
+  }, [caption, busy])
+  const cloudLobes = useMemo(
+    () => buildCloudLobes(cloudSize.w, cloudSize.h),
+    [cloudSize.w, cloudSize.h]
+  )
   const [inputOpen, setInputOpen] = useState(false)
   const [pinned, setPinned] = useState(true)
   const [hovered, setHovered] = useState(false)
@@ -156,9 +178,12 @@ export default function OverlayApp() {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* ═══ Cloud popup — scalloped thought-cloud with outline (reference shape),
-              trailing dots bottom-left, auto-dismisses, close ✕ top-right ═══ */}
-      <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center">
+      {/* ═══ Cloud popup — self-sizing scalloped thought-cloud with outline,
+              sits right above the creature; auto-dismisses; close ✕ inside ═══ */}
+      <div
+        className="pointer-events-none absolute left-1/2 z-20 -translate-x-1/2"
+        style={{ bottom: inputOpen ? 248 : hoverStable ? 188 : 152 }}
+      >
         <AnimatePresence mode="wait">
           {(caption || busy) && (
             <motion.div
@@ -167,51 +192,52 @@ export default function OverlayApp() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.96 }}
               transition={{ duration: 0.18 }}
-              className="relative h-[170px] w-[300px] shrink-0"
+              className="relative"
             >
               {/* Outline lobes — navy rim of the cloud silhouette */}
-              {CLOUD_LOBES.map((l, i) => (
+              {cloudLobes.map((l, i) => (
                 <span
                   key={`o${i}`}
                   className="cloud-lobe cloud-lobe-outline"
-                  style={{ left: l.cx, top: l.cy, width: l.size + 7, height: l.size + 7 }}
+                  style={{ left: edge('50%', l.dx), top: edge('50%', l.dy), width: 47, height: 47 }}
                 />
               ))}
               {/* Fill lobes — cover the rim everywhere except the outer edge */}
-              {CLOUD_LOBES.map((l, i) => (
+              {cloudLobes.map((l, i) => (
                 <span
                   key={`f${i}`}
                   className="cloud-lobe cloud-lobe-fill"
-                  style={{ left: l.cx, top: l.cy, width: l.size, height: l.size }}
+                  style={{ left: edge('50%', l.dx), top: edge('50%', l.dy), width: 40, height: 40 }}
                 />
               ))}
-              {/* Content well — fills the middle between the lobe ring */}
-              <div className={`cloud-well absolute inset-[16px] rounded-[22px] px-4 py-2.5 text-[12px] leading-relaxed ${needsClarification ? 'text-amber-200' : 'text-white/90'}`}>
+              {/* Content well — sizes the cloud to the text */}
+              <div
+                ref={cloudWellRef}
+                className={`cloud-well relative rounded-[22px] px-[26px] py-[20px] text-[12px] leading-relaxed ${needsClarification ? 'text-amber-200' : 'text-white/90'}`}
+              >
                 {/* Close ✕ */}
                 <button
                   onClick={() => setCaption('')}
-                  className="pointer-events-auto absolute right-1.5 top-1 rounded-full p-1 text-white/35 transition-colors hover:bg-white/10 hover:text-white"
+                  className="pointer-events-auto absolute right-2 top-1.5 rounded-full p-1 text-white/35 transition-colors hover:bg-white/10 hover:text-white"
                   title="Close"
                 >
                   <X className="h-3 w-3" />
                 </button>
                 {busy ? (
-                  <span className="flex h-full items-center justify-center gap-1">
+                  <span className="flex justify-center gap-1 py-1.5 pr-3">
                     {[0, 1, 2].map((i) => (
                       <span key={i} className="h-1.5 w-1.5 rounded-full bg-[#a9b8ff]" style={{ animation: `thinkBounce 0.9s ${i * 0.15}s infinite` }} />
                     ))}
                   </span>
                 ) : (
-                  <span className="line-clamp-4 pr-3">{caption}</span>
+                  <span className="line-clamp-6 pr-3">{caption}</span>
                 )}
               </div>
-              {/* Trailing dots — bottom-left, outlined like the cloud */}
-              {CLOUD_DOTS.map((d, i) => (
-                <React.Fragment key={`d${i}`}>
-                  <span className="cloud-lobe cloud-lobe-outline" style={{ left: d.cx, top: d.cy, width: d.size + 6, height: d.size + 6 }} />
-                  <span className="cloud-lobe cloud-lobe-fill" style={{ left: d.cx, top: d.cy, width: d.size, height: d.size }} />
-                </React.Fragment>
-              ))}
+              {/* Trailing dots — outside the cloud's bottom-left, toward the creature */}
+              <span className="cloud-lobe cloud-lobe-outline" style={{ left: edge('50%', -(cloudSize.w || 130) / 2 + 22), top: edge('50%', (cloudSize.h || 70) / 2 + 18), width: 27, height: 27 }} />
+              <span className="cloud-lobe cloud-lobe-fill" style={{ left: edge('50%', -(cloudSize.w || 130) / 2 + 22), top: edge('50%', (cloudSize.h || 70) / 2 + 18), width: 21, height: 21 }} />
+              <span className="cloud-lobe cloud-lobe-outline" style={{ left: edge('50%', -(cloudSize.w || 130) / 2 + 4), top: edge('50%', (cloudSize.h || 70) / 2 + 34), width: 17, height: 17 }} />
+              <span className="cloud-lobe cloud-lobe-fill" style={{ left: edge('50%', -(cloudSize.w || 130) / 2 + 4), top: edge('50%', (cloudSize.h || 70) / 2 + 34), width: 12, height: 12 }} />
             </motion.div>
           )}
         </AnimatePresence>
