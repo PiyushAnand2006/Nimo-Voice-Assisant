@@ -1,150 +1,173 @@
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400;1,600&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-serif: "Playfair Display", Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-serif: "Baloo 2", Georgia, serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 
-  --color-primary: #3de8c4;
-  --color-primary-container: rgba(61, 232, 196, 0.08);
-  --color-on-primary-container: #3de8c4;
-  --color-face-screen: #06080c;
-  --color-app-bg: #070a0e;
-  --color-surface-container-lowest: #0c0f17;
-  --color-on-surface-variant: rgba(255, 255, 255, 0.4);
-  --color-outline-variant: rgba(61, 232, 196, 0.05);
+  /* Full-stage palette: pure black stage + periwinkle character + glass */
+  --color-primary: #6d7ef2;
+  --color-mint: #5eead4;
+  --color-app-bg: #000000;
+  --color-stage-glass: rgba(10, 12, 28, 0.55);
 
-  --color-status-happy: #3de8c4;
-  --color-status-error: #ef4444;
-  --color-status-confused: #f59e0b;
-  --color-status-music: #a855f7;
-  --color-status-thinking: #3b82f6;
-  --color-status-listening: #3de8c4;
+  --color-status-happy: #5eead4;
+  --color-status-error: #f87171;
+  --color-status-confused: #fbbf24;
+  --color-status-music: #c084fc;
+  --color-status-thinking: #93c5fd;
+  --color-status-listening: #5eead4;
 }
 
-@layer utilities {
-  /* Blinking eye animation */
-  @keyframes blink {
-    0%, 90%, 100% {
-      transform: scaleY(1);
-    }
-    95% {
-      transform: scaleY(0.05);
-    }
-  }
-
-  .blinking {
-    animation: blink 4s infinite ease-in-out;
-  }
-
-  /* Shaking robot face shell (Error state) */
-  @keyframes shake {
-    0%, 100% { transform: translate(0, 0) rotate(0deg); }
-    10% { transform: translate(-2px, -1px) rotate(-0.5deg); }
-    20% { transform: translate(-3px, 0px) rotate(0.5deg); }
-    30% { transform: translate(0px, 2px) rotate(0deg); }
-    40% { transform: translate(1px, -1px) rotate(0.5deg); }
-    50% { transform: translate(-1px, 2px) rotate(-0.5deg); }
-    60% { transform: translate(-3px, 1px) rotate(0deg); }
-    70% { transform: translate(2px, 1px) rotate(-0.5deg); }
-    80% { transform: translate(-1px, -1px) rotate(0.5deg); }
-    90% { transform: translate(2px, 2px) rotate(0deg); }
-  }
-
-  .face-shake {
-    animation: shake 0.3s infinite ease-in-out;
-  }
-
-  /* Talking eye bounce */
-  @keyframes talkingEye {
-    0%, 100% { transform: scaleY(1); }
-    50% { transform: scaleY(0.75) translateY(4px); }
-  }
-
-  .eye-talking {
-    animation: talkingEye 0.25s infinite ease-in-out;
-  }
-
-  /* Listening glow effect */
-  .listening-glow {
-    filter: drop-shadow(0 0 12px rgba(16, 185, 129, 0.6));
-  }
-
-  /* Music eye rhythm */
-  @keyframes musicEye {
-    0%, 100% { transform: translateY(0); }
-    50% { transform: translateY(-8px) scaleY(1.1); }
-  }
-
-  .eye-music {
-    animation: musicEye 0.4s infinite ease-in-out;
-  }
-
-  /* Custom clean scrollbar */
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.08);
-    border-radius: 9999px;
-  }
-
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  /* Glowing Eye Utilities */
-  .eye-idle {
-    background-color: #3de8c4;
-    box-shadow: 0 0 20px rgba(61, 232, 196, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-  }
-  
-  .eye-listening {
-    background-color: #3de8c4;
-    box-shadow: 0 0 25px rgba(61, 232, 196, 1), inset 0 2px 4px rgba(255, 255, 255, 0.5);
-    animation: listeningPulse 1.5s infinite ease-in-out;
-  }
-
-  .eye-thinking {
-    background-color: #3b82f6;
-    box-shadow: 0 0 20px rgba(59, 130, 246, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-  }
-
-  .eye-happy {
-    background-color: #3de8c4;
-    box-shadow: 0 0 20px rgba(61, 232, 196, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-  }
-
-  .eye-confused {
-    background-color: #f59e0b;
-    box-shadow: 0 0 20px rgba(245, 158, 11, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-  }
-
-  .eye-error {
-    background-color: #ef4444;
-    box-shadow: 0 0 20px rgba(239, 68, 68, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-  }
-
-  .eye-music-glow {
-    background-color: #a855f7;
-    box-shadow: 0 0 20px rgba(168, 85, 247, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-  }
-
-  @keyframes listeningPulse {
-    0%, 100% {
-      transform: scale(1);
-      box-shadow: 0 0 20px rgba(61, 232, 196, 0.8), inset 0 2px 4px rgba(255, 255, 255, 0.4);
-    }
-    50% {
-      transform: scale(1.04);
-      box-shadow: 0 0 35px rgba(61, 232, 196, 1), inset 0 2px 4px rgba(255, 255, 255, 0.6);
-    }
-  }
+html, body, #root {
+  height: 100%;
+  background: #000; /* pure black stage behind the dome */
 }
+
+/* ═══ Stage animations ══════════════════════════════════════════════════ */
+
+@keyframes stageFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.stage-fade-in { animation: stageFadeIn 0.6s ease-out; }
+
+/* The dome gently breathes (scales around its far-away center) */
+@keyframes domeBreathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.012); }
+}
+.dome-breathe { animation: domeBreathe 5.2s ease-in-out infinite; }
+
+/* Floating blob: gentle hover-breathing */
+@keyframes blobBreathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-6px) scale(1.015); }
+}
+.blob-breathe { animation: blobBreathe 3.6s ease-in-out infinite; }
+
+/* Blob bounces while talking */
+@keyframes blobTalkBounce {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  30% { transform: translateY(-5px) rotate(-1deg); }
+  70% { transform: translateY(-2px) rotate(1deg); }
+}
+.blob-talk-bounce { animation: blobTalkBounce 0.55s ease-in-out infinite; }
+
+/* Star floats on the blob's head */
+@keyframes blobStarFloat {
+  0%, 100% { transform: translate(0, 0) rotate(-5deg); }
+  50% { transform: translate(0, -3px) rotate(7deg); }
+}
+.blob-star-float { animation: blobStarFloat 3s ease-in-out infinite; }
+
+/* Halo slowly pulses */
+@keyframes haloBreathe {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+.halo-breathe { animation: haloBreathe 4.2s ease-in-out infinite; }
+
+/* Thought dots pop in sequence */
+@keyframes thoughtPop {
+  0%, 100% { opacity: 0.25; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-7px); }
+}
+.thought-pop { animation: thoughtPop 1.25s infinite ease-in-out; }
+
+/* Sleep Zz drift */
+@keyframes zzFloat {
+  0% { transform: translate(0, 0) rotate(0deg); opacity: 0; }
+  25% { opacity: 1; }
+  100% { transform: translate(26px, -46px) rotate(14deg); opacity: 0; }
+}
+.zz-float { animation: zzFloat 2.6s infinite ease-out; }
+
+/* Music notes drift */
+@keyframes musicNote {
+  0% { transform: translateY(10px) rotate(-8deg); opacity: 0; }
+  25% { opacity: 1; }
+  100% { transform: translateY(-40px) rotate(12deg); opacity: 0; }
+}
+.music-note { animation: musicNote 1.7s infinite ease-out; }
+
+/* Star twinkle while thinking */
+@keyframes starTwinkle {
+  0%, 100% { opacity: 1; transform: scale(1) rotate(0deg); }
+  50% { opacity: 0.7; transform: scale(1.18) rotate(22deg); }
+}
+.star-twinkle { animation: starTwinkle 1.4s infinite ease-in-out; }
+
+/* Error vignette */
+@keyframes errorVignette {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 0.55; }
+}
+.error-vignette {
+  background: radial-gradient(ellipse at 50% 78%, transparent 46%, rgba(255, 60, 90, 0.28) 100%);
+  animation: errorVignette 1.1s infinite ease-in-out;
+}
+
+/* Glass panels over the stage */
+.glass {
+  background: rgba(9, 11, 26, 0.6);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px solid rgba(150, 170, 255, 0.14);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.55);
+}
+
+.glass-soft {
+  background: rgba(9, 11, 26, 0.38);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(150, 170, 255, 0.1);
+}
+
+/* Slide-in panels */
+@keyframes slideInRight {
+  from { transform: translateX(40px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideInLeft {
+  from { transform: translateX(-40px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+.slide-in-right { animation: slideInRight 0.28s ease-out; }
+.slide-in-left { animation: slideInLeft 0.28s ease-out; }
+
+/* Bouncing thinking dots (kept for bubble use) */
+@keyframes thinkBounce {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(-7px); opacity: 1; }
+}
+
+/* OPACITY-ONLY animations for use INSIDE the big stage SVG — Chromium throws
+   DOMException when React commits DOM changes around transform-animated SVG
+   subtrees, so the stage must never use transform keyframes. */
+@keyframes starGlow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.star-glow { animation: starGlow 1.4s infinite ease-in-out; }
+
+@keyframes thoughtGlow {
+  0%, 100% { opacity: 0.25; }
+  50% { opacity: 1; }
+}
+.thought-glow { animation: thoughtGlow 1.25s infinite ease-in-out; }
+
+@keyframes noteGlow {
+  0%, 100% { opacity: 0.15; }
+  25% { opacity: 1; }
+  75% { opacity: 0.6; }
+}
+.note-glow { animation: noteGlow 1.7s infinite ease-out; }
+
+/* ═══ Scrollbars ════════════════════════════════════════════════════════ */
+
+.custom-scrollbar::-webkit-scrollbar { width: 5px; height: 5px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(150, 170, 255, 0.16); border-radius: 9999px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(150, 170, 255, 0.32); }

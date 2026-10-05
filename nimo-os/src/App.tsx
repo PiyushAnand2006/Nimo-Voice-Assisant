@@ -1,1219 +1,686 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { 
-  Bot, 
-  Terminal, 
-  Brain, 
-  Activity, 
-  Mic, 
-  MicOff, 
-  Settings, 
-  Volume2, 
-  Clock, 
-  Database, 
-  Trash2, 
-  ExternalLink, 
-  Cpu, 
-  TrendingUp, 
-  Wifi, 
-  Zap,
-  Send,
-  AlertCircle,
-  Globe,
-  Bell,
-  X
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import {
+  Mic, MicOff, Volume2, Bell, X, FolderSearch, AppWindow, Camera, Sparkles,
+  CheckCircle2, XCircle, Loader2, Minus, Square, Send, Terminal, Settings,
+  Wand2, Maximize, Minimize, Radio, MoonStar, Eye, EyeOff
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { SearchResult } from "./types";
-import { FaceState, LogEntry, TimerInfo, SystemStatus, PersonalityTrait, CommandResponse } from "./types";
+import NimoFace from "./components/NimoFace";
+import PointerBuddy from "./components/PointerBuddy";
+import StageErrorBoundary from "./components/StageErrorBoundary";
+import Markdown from "./components/Markdown";
+import { useNimoAgent } from "./hooks/useNimoAgent";
+import type {
+  FaceState, LogEntry, TimerInfo, PersonalityTrait,
+  AgentCard, InstalledApp, FileHit
+} from "./types";
+
+type RightDock = "activity" | "logs" | null;
+type LeftDock = "tools" | "settings" | null;
+
+const TOOL_EMOJI: Record<string, string> = {
+  get_weather: "🌦️", answer_from_web: "📚", research_topic: "🔬",
+  launch_app: "🚀", find_installed_apps: "🗂️", search_files: "📁",
+  take_screenshot: "📸", set_timer: "⏱️", play_music: "🎵",
+  search_the_web: "🔎", open_website: "🌐"
+};
+
+const STATUS_TEXT: Record<FaceState, string> = {
+  idle: "hovering nearby", listening: 'listening for "hey nimo"',
+  thinking: "thinking", talking: "talking", happy: "delighted",
+  confused: "needs your answer", error: "something broke", music: "vibing"
+};
 
 export default function App() {
-  // Navigation tabs
-  const [activeTab, setActiveTab] = useState<"core" | "logs" | "personality" | "sensors">("core");
-  
-  // NIMO state
-  const [faceState, setFaceState] = useState<FaceState>("idle");
-  const [personality, setPersonality] = useState<PersonalityTrait>("friendly");
-  const [isListening, setIsListening] = useState(false);
+  const bridge = (window as any).nimo || null;
+  const isElectron = Boolean(bridge);
+  const API = isElectron ? "http://localhost:3001" : "";
+
+  const {
+    faceState, caption, steps, cards, needsClarification, busy,
+    pendingApproval, approve, lastAgentText, voiceEngine,
+    ask, speak, voiceEnabled, setVoiceEnabled, wakeRequired, setWakeRequired,
+    transcript, setPersonality: pushPersonality, mouse
+  } = useNimoAgent({ autoVoice: false, sessionId: "dashboard", listenPushes: false });
+
   const [manualInput, setManualInput] = useState("");
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [showLogsSidebar, setShowLogsSidebar] = useState(true);
-  const [volume, setVolume] = useState(80);
+  const [personality, setPersonality] = useState<PersonalityTrait>("friendly");
+  const [glow, setGlow] = useState(60);
+  const [buddyOn, setBuddyOn] = useState(true);
+  const [controlMode, setControlMode] = useState<"ask" | "granted">("ask");
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [companionVisible, setCompanionVisible] = useState(true);
+  const [rightDock, setRightDock] = useState<RightDock>("activity");
+  const [leftDock, setLeftDock] = useState<LeftDock>(null);
 
-  // Persistent voice toggle
-  const [voiceEnabled, setVoiceEnabled] = useState(false);
-  const [liveTranscript, setLiveTranscript] = useState("");
-  // Inline web-search results returned by the backend.
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searchResultsQuery, setSearchResultsQuery] = useState("");
-  const logsEndRef = useRef<HTMLDivElement>(null);
-
-  // Stable refs so recognition callbacks read current values without
-  // recreating the SpeechRecognition instance.
-  const recognitionInstanceRef = useRef<any>(null);
-  const voiceEnabledRef = useRef(voiceEnabled);
-  voiceEnabledRef.current = voiceEnabled;
-  const stoppedByToggleRef = useRef(false);
-  const isListeningRef = useRef(false);
-  const submitCommandRef = useRef<(text: string) => void>(() => {});
-
-  // Fetch logs and timers from Express backend
+  // Backend-synced state
   const [logsList, setLogsList] = useState<LogEntry[]>([]);
   const [backendTimers, setBackendTimers] = useState<TimerInfo[]>([]);
-  const [systemMetrics, setSystemMetrics] = useState<SystemStatus>({
-    cpuUsage: 12,
-    memoryUsage: 45,
-    temperature: 38,
-    decibelLevel: 5,
-    signalStrength: 98,
-    uptime: 0
-  });
-  const [systemTime, setSystemTime] = useState("");
-  const [timerNotifications, setTimerNotifications] = useState<Array<{id:string,label:string}>>([]);
+  const [timerNotifications, setTimerNotifications] = useState<Array<{ id: string; label: string }>>([]);
+  const [installedApps, setInstalledApps] = useState<InstalledApp[]>([]);
+  const [appFilter, setAppFilter] = useState("");
+  const [fileQuery, setFileQuery] = useState("");
+  const [fileFolder, setFileFolder] = useState("");
+  const [fileHits, setFileHits] = useState<FileHit[]>([]);
+  const [fileSearching, setFileSearching] = useState(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
-  // Live local Clock with hr:min:sec
-  useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      const h = now.getHours().toString().padStart(2, "0");
-      const m = now.getMinutes().toString().padStart(2, "0");
-      const s = now.getSeconds().toString().padStart(2, "0");
-      setSystemTime(`${h}:${m}:${s}`);
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Timer-done event listener (from backend via Electron IPC or polling fallback)
-  useEffect(() => {
-    // Try Electron IPC first
-    if ((window as any).nimo?.on) {
-      const unsub = (window as any).nimo.on('nimo:timer-done', (payload: any) => {
-        if (payload) {
-          setTimerNotifications(prev => [...prev, { id: payload.id || Date.now().toString(), label: payload.label || 'Timer' }]);
-          speakMessage(`${payload.label || 'Timer'} is done!`, 'happy');
-          // Auto-dismiss after 8 seconds
-          setTimeout(() => {
-            setTimerNotifications(prev => prev.filter(n => n.id !== (payload.id || '')))
-          }, 8000);
-        }
-      });
-      return () => { if (typeof unsub === 'function') unsub() }
-    }
-  }, []);
-
-  // Poll active timers from backend (fallback for timer-done detection)
-  const syncTimers = useCallback(async () => {
+  // ── Logs & timers polling ───────────────────────────────────────────────
+  const syncLogsAndTimers = useCallback(async () => {
     try {
-      const res = await fetch("/api/timers");
-      if (res.ok) {
-        const data = await res.json();
-        if (data.timers) {
-          setBackendTimers(data.timers.map((t: any) => ({
-            id: t.id,
-            duration: t.minutes * 60,
-            remaining: t.remaining,
-            label: t.label,
-            active: t.active
-          })))
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
+      const res = await fetch(`${API}/api/logs`);
+      if (res.ok) setLogsList((await res.json()).logs || []);
+      const t = await fetch(`${API}/api/timers`);
+      if (t.ok) setBackendTimers((await t.json()).timers || []);
+    } catch { /* offline */ }
+  }, [API]);
 
-// Fetch logs and timers from Express backend
-  const syncLogsAndTimers = async () => {
-    try {
-      const res = await fetch("/api/logs");
-      if (res.ok) {
-        const data = await res.json();
-        setLogsList(data.logs || []);
-        setBackendTimers(data.timers || []);
-      }
-    } catch (err) {
-      console.error("Failed to sync backend logs and timers:", err);
-    }
-    // Also poll the dedicated timers endpoint for accurate remaining time
-    await syncTimers();
-  };
-
-  // Poll backend logs & timers frequently (every 1 second)
   useEffect(() => {
     syncLogsAndTimers();
-    const interval = setInterval(syncLogsAndTimers, 1000);
-    return () => clearInterval(interval);
+    const i = setInterval(syncLogsAndTimers, 1000);
+    return () => clearInterval(i);
+  }, [syncLogsAndTimers]);
+
+  useEffect(() => { logsEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [logsList.length]);
+
+  // ── Timer notifications (Electron push) ─────────────────────────────────
+  useEffect(() => {
+    if (!bridge) return;
+    const off = bridge.on("nimo:timer-done", (payload: any) => {
+      if (!payload) return;
+      const id = payload.id || Date.now().toString();
+      setTimerNotifications((prev) => [...prev, { id, label: payload.label || "Timer" }]);
+      setTimeout(() => setTimerNotifications((prev) => prev.filter((n) => n.id !== id)), 8000);
+    });
+    return off;
+  }, [bridge]);
+
+  // ── Fullscreen sync (Electron reports F11 too) ──────────────────────────
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
 
-  // Post logs to backend
-  const postLog = async (text: string, type: string, category: LogEntry['category']) => {
-    try {
-      await fetch("/api/logs/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, type, category })
-      });
-      syncLogsAndTimers();
-    } catch (err) {
-      console.error("Failed to post client log:", err);
-    }
-  };
-
-  // Clear log buffer
-  const handleClearLogs = async () => {
-    try {
-      await fetch("/api/logs/clear", { method: "POST" });
-      syncLogsAndTimers();
-    } catch (err) {
-      console.error("Failed to clear log buffer:", err);
-    }
-  };
-
-  // Simulate changing ambient telemetry variables over time
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setSystemMetrics(prev => ({
-        ...prev,
-        cpuUsage: Math.max(5, Math.min(95, prev.cpuUsage + Math.floor(Math.random() * 7) - 3)),
-        memoryUsage: Math.max(30, Math.min(80, prev.memoryUsage + Math.floor(Math.random() * 3) - 1)),
-        temperature: Math.max(35, Math.min(55, prev.temperature + Math.floor(Math.random() * 3) - 1)),
-        decibelLevel: faceState === 'talking' ? Math.floor(45 + Math.random() * 30) : Math.floor(5 + Math.random() * 5),
-        uptime: prev.uptime + 2
-      }));
-    }, 2000);
-    return () => clearInterval(interval);
-  }, [faceState]);
-
-  // Handle Text-To-Speech Playback
-  const speakMessage = (text: string, stateOnSpeak: FaceState) => {
-    // Safeguard: reset state to idle after 4 seconds if speech fails to start (e.g. blocked by user gesture policy)
-    const safeguardTimeout = setTimeout(() => {
-      setFaceState('idle');
-    }, 4000);
-
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voices = window.speechSynthesis.getVoices();
-      
-      // Select natural sounding voice
-      const preferredVoice = voices.find(v => 
-        v.name.includes("Google") || 
-        v.name.includes("Samantha") || 
-        v.name.includes("Aria") || 
-        v.name.includes("David") ||
-        v.lang.startsWith("en")
-      );
-      if (preferredVoice) utterance.voice = preferredVoice;
-      
-      utterance.rate = 1.05;
-      utterance.pitch = 1.0;
-      
-      utterance.onstart = () => {
-        clearTimeout(safeguardTimeout);
-        setFaceState(stateOnSpeak === 'idle' ? 'talking' : stateOnSpeak);
-      };
-      utterance.onend = () => {
-        clearTimeout(safeguardTimeout);
-        setFaceState('idle');
-      };
-      utterance.onerror = () => {
-        clearTimeout(safeguardTimeout);
-        setFaceState('idle');
-      };
-      
-      window.speechSynthesis.speak(utterance);
+  const toggleFullscreen = async () => {
+    if (bridge) {
+      bridge.windowControl?.("toggle-fullscreen");
+      setIsFullscreen((f) => !f);
     } else {
-      clearTimeout(safeguardTimeout);
-      // Offline / TTS unsupported fallback
-      setFaceState(stateOnSpeak);
-      setTimeout(() => setFaceState('idle'), 3500);
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await document.documentElement.requestFullscreen();
+      } catch { /* user gesture required */ }
     }
   };
 
-  // Submit voice transcript or manual command text to backend
-  const submitCommand = async (commandText: string) => {
-    if (!commandText || commandText.trim() === "") return;
-    
-    setFaceState("thinking");
-    setSearchResults([]);
-    setSearchResultsQuery("");
-    await postLog(`Processing command: "${commandText}"`, "PROCESS", "intent");
-
+  // ── Companion visibility toggle (show/hide the floating creature) ───────
+  const toggleCompanion = async () => {
     try {
-      const res = await fetch("/api/run-command", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
-          transcript: commandText,
-          personality,
-        })
-      });
-      
-       if (res.ok) {
-        const data: CommandResponse = await res.json();
-        
-        // Output spoken text and change face state accordingly
-        speakMessage(data.speak, data.state);
-
-        // Surface inline web-search results if the backend returned any.
-        if (data.results && data.results.length > 0) {
-          setSearchResults(data.results);
-          setSearchResultsQuery(commandText);
-          await postLog(`Search returned ${data.results.length} result(s).`, "WEB", "info");
-        }
-        
-        if (data.openUrl) {
-          await postLog(`URL: ${data.openUrl}`, "BROWSER", "action");
-          // Guaranteed fallback: open directly in the browser so a command like
-          // "open youtube" / "play X on youtube" always results in a visible window,
-          // even if the backend OS-level launcher is unavailable.
-          try {
-            const w = window.open(data.openUrl, "_blank");
-            if (!w) await postLog("Popup blocked — backend should have launched it.", "BROWSER", "error");
-          } catch (e) {
-            await postLog(`Frontend open failed: ${(e as Error).message}`, "BROWSER", "error");
-          }
-        }
-
-        if (data.action === "set_volume") {
-          const match = commandText.match(/\d+/);
-          if (match) setVolume(parseInt(match[0]));
-        } else if (data.action === "volume_up") {
-          setVolume(v => Math.min(100, v + 10));
-        } else if (data.action === "volume_down") {
-          setVolume(v => Math.max(0, v - 10));
-        }
-
-        if (data.stop) {
-          window.speechSynthesis.cancel();
-          setFaceState('idle');
-        }
-
-      } else {
-        throw new Error("API return failure");
-      }
-    } catch (err) {
-      console.error("Failed to run command:", err);
-      speakMessage("I had trouble resolving that command. Please verify my servers are online.", "error");
+      const res = await bridge?.invoke("nimo:toggle-companion");
+      const v = (res as any)?.data?.visible ?? (res as any)?.visible;
+      setCompanionVisible(typeof v === "boolean" ? v : !companionVisible);
+    } catch {
+      setCompanionVisible((c) => !c);
     }
   };
-  submitCommandRef.current = submitCommand;
-// Setup Web Speech API for voice recognition — init once, never recreate
-  useEffect(() => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) return;
 
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const rec = new SpeechRecognition();
-    // Command mode: each speech burst is one utterance. This avoids the
-    // continuous-mode bug where event.resultIndex advances and only the
-    // latest fragment is captured, causing each word to be sent separately.
-    rec.continuous = false;
-    rec.interimResults = true;
-    rec.lang = "en-US";
+  // ── Actions ─────────────────────────────────────────────────────────────
+  const submitCommand = async (text: string) => {
+    if (!text.trim() || busy) return;
+    // server.ts (or the backend's own buffer in Electron) logs the exchange.
+    await ask(text, personality);
+    if (rightDock === null) setRightDock("activity");
+  };
 
-    // Accumulator for the live (interim + final) transcript of the current utterance.
-    let interimBuffer = "";
-
-    rec.onstart = () => {
-      interimBuffer = "";
-      isListeningRef.current = true;
-      setIsListening(true);
-      postLog("Voice recognition session started.", "MIC_ON", "voice");
-    };
-
-    rec.onresult = (event: any) => {
-      let interim = "";
-      let finalText = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const res = event.results[i];
-        if (res.isFinal) {
-          finalText += res[0].transcript;
-        } else {
-          interim += res[0].transcript;
-        }
-      }
-      interimBuffer = (interimBuffer + finalText + interim).trim();
-      setLiveTranscript(interimBuffer);
-
-      if (finalText) {
-        // Strip "hey nimo" if present, but do not require it.
-        const cleanText = finalText.replace(/hey\s+nimo/gi, "").trim();
-        if (cleanText) {
-          submitCommandRef.current(cleanText);
-        }
-      }
-    };
-
-    rec.onerror = (event: any) => {
-      if (event.error === "no-speech") {
-        if (voiceEnabledRef.current && !stoppedByToggleRef.current) {
-          setTimeout(() => { try { rec.start(); } catch { /* noop */ } }, 200);
-        }
-        return;
-      }
-      isListeningRef.current = false;
-      setIsListening(false);
-      setLiveTranscript("");
-      setFaceState("idle");
-      postLog(`Microphone Error: ${event.error}`, "MIC_ERR", "error");
-      if (voiceEnabledRef.current && !stoppedByToggleRef.current) {
-        setTimeout(() => { try { rec.start(); } catch { /* noop */ } }, 1500);
-      }
-    };
-
-    rec.onend = () => {
-      isListeningRef.current = false;
-      setIsListening(false);
-      setLiveTranscript("");
-      interimBuffer = "";
-      // Keep listening as long as the user has voice enabled.
-      if (voiceEnabledRef.current && !stoppedByToggleRef.current) {
-        setTimeout(() => { try { rec.start(); } catch { /* noop */ } }, 80);
-      }
-    };
-
-    recognitionInstanceRef.current = rec;
-
-    if (voiceEnabledRef.current) {
-      setTimeout(() => { try { rec.start(); } catch { /* noop */ } }, 100);
-    }
-
-    return () => {
-      stoppedByToggleRef.current = true;
-      try { rec.stop(); } catch { /* noop */ }
-      isListeningRef.current = false;
-    };
-  }, []);
-// Toggle voice recognition — clean boolean toggle only
-const toggleListening = () => {
-  const next = !voiceEnabled;
-  setVoiceEnabled(next);
-  if (!next) {
-    stoppedByToggleRef.current = true;
-    try { recognitionInstanceRef.current?.stop?.(); } catch { /* noop */ }
-    setIsListening(false);
-    setLiveTranscript("");
-    postLog("Voice capture disabled by user.", "MIC_OFF", "voice");
-    speakMessage("Voice deactivated", "idle");
-  } else {
-    stoppedByToggleRef.current = false;
-    postLog("Voice capture enabled by user. Speak a command clearly.", "MIC_ON", "voice");
-    speakMessage("Voice activated", "listening");
-    setTimeout(() => {
-      try { recognitionInstanceRef.current?.start?.(); } catch { /* noop */ }
-    }, 100);
-  }
-};
-  // Manual input submit
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (manualInput.trim() === "") return;
     const cmd = manualInput;
     setManualInput("");
     submitCommand(cmd);
   };
 
+  const choosePersonality = (p: PersonalityTrait, name: string) => {
+    setPersonality(p);
+    pushPersonality(p);
+    speak(`Personality set to ${name}.`, "happy");
+  };
 
+  const loadApps = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/os/apps`);
+      if (res.ok) setInstalledApps(((await res.json()).apps || []) as InstalledApp[]);
+    } catch { /* noop */ }
+  }, [API]);
 
-  const getStateColor = (state: FaceState) => {
-    switch (state) {
-      case "listening": return "text-status-listening";
-      case "thinking": return "text-status-thinking";
-      case "talking": return "text-primary";
-      case "happy": return "text-status-happy";
-      case "confused": return "text-status-confused";
-      case "error": return "text-status-error";
-      case "music": return "text-status-music";
-      default: return "text-primary";
+  useEffect(() => { if (leftDock === "tools") loadApps(); }, [leftDock, loadApps]);
+
+  // Load + toggle the computer-control mode (ask first / granted).
+  useEffect(() => {
+    if (leftDock !== "settings") return;
+    fetch(`${API}/api/agent/control-mode`).then((r) => r.json()).then((d) => {
+      if (d?.mode) setControlMode(d.mode);
+    }).catch(() => {});
+  }, [leftDock, API]);
+
+  const toggleControlMode = () => {
+    const next = controlMode === "granted" ? "ask" : "granted";
+    setControlMode(next);
+    fetch(`${API}/api/agent/control-mode`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: next })
+    }).catch(() => {});
+    speak(next === "granted"
+      ? "Computer control granted. I can now click and type on your screen when you ask."
+      : "Computer control set back to asking first.", "happy");
+  };
+
+  const runFileSearch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fileQuery.trim()) return;
+    setFileSearching(true);
+    try {
+      const res = await fetch(`${API}/api/os/search-files`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: fileQuery, folder: fileFolder || undefined })
+      });
+      const data = await res.json();
+      setFileHits(data.results || []);
+    } catch { /* noop */ }
+    setFileSearching(false);
+  };
+
+  const takeScreenshot = async () => {
+    try {
+      if (bridge) {
+        // Speak the real absolute path so the location is never a mystery.
+        const res = await bridge.invoke("nimo:take-screenshot");
+        const p = (res as any)?.data?.path as string | undefined;
+        speak(p ? `Screenshot saved at ${p.split("\\").join(", ")}.` : "Screenshot saved in Pictures, NIMO Screenshots.", "happy");
+      } else {
+        await fetch(`${API}/api/run-command`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ transcript: "take a screenshot" })
+        });
+        speak("Screenshot saved in your Pictures folder, inside NIMO Screenshots.", "happy");
+      }
+    } catch { /* noop */ }
+  };
+
+  // ── Rich cards ──────────────────────────────────────────────────────────
+  const renderCard = (card: AgentCard, i: number) => {
+    switch (card.type) {
+      case "weather":
+        return (
+          <div key={i} className="rounded-2xl border border-[#6d7ef2]/30 bg-gradient-to-br from-[#101a3d]/90 to-[#0a0f24]/90 p-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-[10px] uppercase tracking-[0.18em] text-white/40">Live weather</p>
+                <p className="mt-0.5 text-sm font-semibold text-white">{String(card.place || "")}</p>
+              </div>
+              <span className="font-mono text-3xl font-bold text-[#a9b8ff]">{String(card.temperature ?? "–")}°</span>
+            </div>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-white/55">
+              <span>{String(card.condition || "")}</span>
+              <span>Feels {String(card.feelsLike ?? "–")}°</span>
+              <span>Humidity {String(card.humidity ?? "–")}%</span>
+              <span>Wind {String(card.windKph ?? "–")} km/h</span>
+              <span>H {String(card.high ?? "–")}° / L {String(card.low ?? "–")}°</span>
+            </div>
+          </div>
+        );
+      case "knowledge":
+        return (
+          <div key={i} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/40">Knowledge lookup</p>
+            <p className="mt-0.5 text-sm font-semibold text-white">{String(card.title || "")}</p>
+            <p className="mt-1.5 text-[12px] leading-relaxed text-white/65">{String(card.extract || "").slice(0, 400)}</p>
+            {card.url ? (
+              <a href={String(card.url)} target="_blank" rel="noopener noreferrer" className="mt-2 inline-block text-[11px] text-[#a9b8ff] hover:underline">Read the source →</a>
+            ) : null}
+          </div>
+        );
+      case "report":
+        return (
+          <div key={i} className="rounded-2xl border border-[#a78bfa]/30 bg-gradient-to-br from-[#170f38]/85 to-[#0a0d20]/90 p-4">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-[#c4b5fd]">Research briefing · {String(card.topic || "")}</p>
+            <Markdown text={String(card.report || "")} className="mt-2 max-h-72 overflow-y-auto custom-scrollbar text-[12px] text-white/75" />
+            {Array.isArray(card.sources) && (card.sources as Array<{ title: string; url: string }>).length > 0 && (
+              <div className="mt-3 border-t border-white/10 pt-2.5">
+                <p className="text-[10px] uppercase tracking-[0.15em] text-white/40">Sources</p>
+                <ul className="mt-1.5 space-y-1">
+                  {(card.sources as Array<{ title: string; url: string }>).map((s, si) => (
+                    <li key={si}><a href={s.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-[#a9b8ff] hover:underline">[{si + 1}] {s.title}</a></li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      case "files":
+        return (
+          <div key={i} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/40">Files found (read-only)</p>
+            <ul className="mt-2 space-y-1.5">
+              {((card.results as FileHit[]) || []).map((f, fi) => (
+                <li key={fi} className="rounded-lg bg-white/[0.04] px-2.5 py-1.5">
+                  <p className="text-[12px] text-white/85">{f.name}</p>
+                  <p className="truncate font-mono text-[10px] text-white/35">{f.path}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      case "search":
+        return (
+          <div key={i} className="rounded-2xl border border-white/10 bg-black/40 p-4">
+            <p className="text-[10px] uppercase tracking-[0.18em] text-white/40">Web results</p>
+            <ul className="mt-2 space-y-2">
+              {((card.results as Array<{ title: string; url: string; snippet: string }>) || []).map((r, ri) => (
+                <li key={ri}>
+                  <a href={r.url} target="_blank" rel="noopener noreferrer" className="text-[12px] text-[#a9b8ff] hover:underline">{r.title}</a>
+                  <p className="text-[11px] text-white/50 line-clamp-2">{r.snippet}</p>
+                </li>
+              ))}
+            </ul>
+          </div>
+        );
+      default:
+        return null;
     }
   };
 
-  // Helper to format uptime
-  const formatUptime = (seconds: number) => {
-    const hrs = Math.floor(seconds / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return `${hrs.toString().padStart(2, "0")}:${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
+  const iconBtn = (label: string, active: boolean, onClick: () => void, icon: React.ReactNode) => (
+    <button
+      onClick={onClick}
+      title={label}
+      className={`rounded-xl p-2 transition-all active:scale-90 ${
+        active ? "bg-[#6d7ef2]/25 text-[#a9b8ff]" : "text-white/45 hover:bg-white/10 hover:text-white"
+      }`}
+    >
+      {icon}
+    </button>
+  );
 
   return (
-    <div className="bg-app-bg text-white font-sans h-screen w-screen overflow-hidden flex flex-col md:flex-row select-none">
-      
-      {/* Timer Done Notifications */}
-      <AnimatePresence>
-        {timerNotifications.map(notif => (
-          <motion.div
-            key={notif.id}
-            initial={{ opacity: 0, y: -40, scale: 0.9 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -20, scale: 0.95 }}
-            className="fixed top-4 left-1/2 -translate-x-1/2 z-[100] bg-[#0a0a0a] border border-[#3de8c4]/40 rounded-lg px-5 py-3 flex items-center gap-3 shadow-[0_0_20px_rgba(61,232,196,0.15)]"
-          >
-            <div className="h-8 w-8 rounded-full bg-[#3de8c4]/15 flex items-center justify-center">
-              <Bell className="h-4 w-4 text-[#3de8c4] animate-bounce" />
-            </div>
-            <div className="flex flex-col">
-              <span className="text-xs text-white font-semibold">{notif.label} is done!</span>
-              <span className="text-[10px] text-white/40 font-mono">Timer completed</span>
-            </div>
-            <button
-              onClick={() => setTimerNotifications(prev => prev.filter(n => n.id !== notif.id))}
-              className="ml-2 p-1 rounded-sm hover:bg-white/5 text-white/30 hover:text-white transition-colors"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </motion.div>
-        ))}
-      </AnimatePresence>
-      
-      {/* Mobile Top Header */}
-      <header className="md:hidden flex items-center justify-between px-6 py-4 border-b border-outline-variant bg-[#0a0a0a] z-50">
-        <div className="flex items-center gap-2">
-          <div className="h-2 w-2 rounded-full bg-[#3de8c4] shadow-[0_0_8px_rgba(61,232,196,0.4)]" />
-          <h1 className="font-serif italic tracking-tight text-white text-lg">Nimo.</h1>
-        </div>
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={() => setShowLogsSidebar(!showLogsSidebar)} 
-            className="text-white/50 hover:text-white transition-colors"
-            title="Toggle Live Event Log"
-          >
-            <Terminal className="h-5 w-5" />
-          </button>
-          <button 
-            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)} 
-            className="text-white/50 hover:text-white transition-colors"
-          >
-            <Settings className="h-5 w-5" />
-          </button>
-        </div>
-      </header>
+    <div className="relative h-screen w-screen select-none overflow-hidden bg-black font-sans text-white">
+      {/* ═══ The character — full-screen stage ═══ */}
+      <StageErrorBoundary>
+        <NimoFace state={faceState} mouse={mouse} glow={glow} />
+      </StageErrorBoundary>
+      <PointerBuddy enabled={buddyOn} />
 
-      {/* Left Sidebar Navigation */}
-      <nav className={`
-        ${isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"}
-        md:translate-x-0
-        fixed md:static top-16 md:top-0 left-0 bottom-0 w-64 border-r border-outline-variant bg-[#0a0a0a] py-8 px-4 flex flex-col gap-8 z-40 transition-transform duration-300 ease-in-out
-      `}>
-        {/* Brand */}
-        <div className="hidden md:block px-4">
-          <div className="text-white font-serif italic text-2xl tracking-tighter">Nimo.</div>
-          <div className="text-[10px] text-white/40 uppercase tracking-[0.2em] mt-1">Intelligence Layer</div>
-        </div>
-
-        {/* Navigation Tabs */}
-        <div className="flex flex-col gap-1 flex-grow">
-          <button
-            onClick={() => { setActiveTab("core"); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-sm font-mono text-[10px] uppercase tracking-[0.15em] transition-all duration-200 ${
-              activeTab === "core" 
-                ? "bg-[#3de8c4]/5 text-[#3de8c4] border-l-2 border-[#3de8c4] font-semibold" 
-                : "text-white/50 hover:text-white hover:bg-white/[0.02]"
-            }`}
-          >
-            <Bot className="h-4 w-4 text-white/60" />
-            Core AI
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("logs"); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-sm font-mono text-[10px] uppercase tracking-[0.15em] transition-all duration-200 ${
-              activeTab === "logs" 
-                ? "bg-[#3de8c4]/5 text-[#3de8c4] border-l-2 border-[#3de8c4] font-semibold" 
-                : "text-white/50 hover:text-white hover:bg-white/[0.02]"
-            }`}
-          >
-            <Terminal className="h-4 w-4 text-white/60" />
-            System Logs
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("personality"); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-sm font-mono text-[10px] uppercase tracking-[0.15em] transition-all duration-200 ${
-              activeTab === "personality" 
-                ? "bg-[#3de8c4]/5 text-[#3de8c4] border-l-2 border-[#3de8c4] font-semibold" 
-                : "text-white/50 hover:text-white hover:bg-white/[0.02]"
-            }`}
-          >
-            <Brain className="h-4 w-4 text-white/60" />
-            Personality
-          </button>
-
-          <button
-            onClick={() => { setActiveTab("sensors"); setIsMobileMenuOpen(false); }}
-            className={`flex items-center gap-3 px-4 py-3 rounded-sm font-mono text-[10px] uppercase tracking-[0.15em] transition-all duration-200 ${
-              activeTab === "sensors" 
-                ? "bg-[#3de8c4]/5 text-[#3de8c4] border-l-2 border-[#3de8c4] font-semibold" 
-                : "text-white/50 hover:text-white hover:bg-white/[0.02]"
-            }`}
-          >
-            <Activity className="h-4 w-4 text-white/60" />
-            Sensors
-          </button>
-        </div>
-
-        {/* Sidebar Footer Controls */}
-        <div className="flex flex-col gap-4 mt-auto">
-          {/* Volume display */}
-          <div className="bg-[#050505] border border-white/5 p-3 rounded-sm flex items-center justify-between">
-            <div className="flex items-center gap-2 text-white/30">
-              <Volume2 className="h-3.5 w-3.5" />
-              <span className="font-mono text-[9px] uppercase tracking-wider">Audio Output</span>
-            </div>
-            <span className="font-mono text-xs text-white/80 font-bold">{volume}%</span>
-          </div>
-
-          <button
-            onClick={toggleListening}
-            className={`w-full flex items-center justify-center gap-2 px-4 py-3 rounded-sm font-mono text-[10px] uppercase tracking-[0.15em] transition-all duration-200 active:scale-95 border ${
-              isListening
-                ? "bg-[#3de8c4]/15 text-[#3de8c4] border-[#3de8c4]/30 animate-pulse font-semibold"
-                : "bg-white/5 text-white/70 border-white/5 hover:border-white/20 hover:bg-white/10"
-            }`}
-          >
-            {isListening ? <MicOff className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
-            {isListening ? "Listening..." : "Enable Voice"}
-          </button>
-        </div>
-      </nav>
-
-      {/* Main Content Area */}
-      <main className="flex-grow flex flex-col min-w-0 h-screen overflow-hidden relative">
-        
-        {/* Overarching Premium Header matching Sophisticated Dark */}
-        <header className="h-20 shrink-0 border-b border-outline-variant flex items-center justify-between px-6 md:px-10 bg-[#050505]/50 backdrop-blur-md">
-          <div className="flex flex-col">
-            <h1 className="text-white font-serif italic text-xl">
-              {activeTab === "core" && "Operational Overview"}
-              {activeTab === "logs" && "System Log Feed"}
-              {activeTab === "personality" && "Cognitive Calibration"}
-              {activeTab === "sensors" && "Hardware Metrics"}
-            </h1>
-            <p className="text-[10px] text-white/30 uppercase tracking-[0.2em] mt-0.5">
-              {activeTab === "core" && "Real-time companion status"}
-              {activeTab === "logs" && "Telemetry and trace buffer"}
-              {activeTab === "personality" && "Synthetic temperament weights"}
-              {activeTab === "sensors" && "Real-time environmental sensors"}
-            </p>
-          </div>
-          <div className="flex items-center gap-6">
-            <div className="hidden sm:flex flex-col text-right">
-              <span className="text-[10px] text-white/30 uppercase tracking-[0.2em]">System Time</span>
-              <span className="text-xs font-mono text-white/80">{systemTime || "00:00:00"}</span>
-            </div>
-            <div className="hidden sm:block w-px h-8 bg-white/10"></div>
-            <div className="flex gap-2 items-center">
-              <div className="h-2 w-2 rounded-full bg-[#3de8c4] shadow-[0_0_8px_rgba(61,232,196,0.4)]"></div>
-              <span className="text-[10px] text-[#3de8c4] uppercase font-bold tracking-[0.2em]">Online</span>
-            </div>
-            {/* Desktop Logs Sidebar Toggle */}
-            <div className="hidden md:block w-px h-8 bg-white/10"></div>
-            <button
-              onClick={() => setShowLogsSidebar(!showLogsSidebar)}
-              className={`p-2 rounded-sm border transition-all duration-200 hidden md:flex items-center justify-center ${
-                showLogsSidebar 
-                  ? "bg-white/10 border-white/20 text-white" 
-                  : "bg-transparent border-white/5 text-white/40 hover:text-white hover:border-white/10"
+      {/* ═══ Speech bubble (above the dome's head) ═══ */}
+      <div className="pointer-events-none absolute left-1/2 top-[7%] z-20 w-full max-w-xl -translate-x-1/2 px-6">
+        <AnimatePresence mode="wait">
+          {(caption || busy) && (
+            <motion.div
+              key={caption || "busy"}
+              initial={{ opacity: 0, y: 12, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+              className={`glass mx-auto rounded-3xl px-6 py-4 text-center text-[14px] leading-relaxed ${
+                needsClarification ? "border-amber-400/40 text-amber-200" : "text-white/90"
               }`}
-              title="Toggle Live Event Log"
             >
-              <Terminal className="h-4 w-4" />
-            </button>
-          </div>
-        </header>
-
-        {/* Scrollable Tab Content Body */}
-        <div className="flex-grow overflow-y-auto custom-scrollbar p-6 md:p-10">
-          
-          {/* Render Tab Contents */}
-          <AnimatePresence mode="wait">
-          {activeTab === "core" && (
-            <motion.div
-              key="core-view"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="flex-grow flex flex-col items-center justify-center gap-8 py-8"
-            >
-              
-              {/* Info Frame Notice (Microphone permissions inside iframes) */}
-              <div className="max-w-md w-full bg-[#0a0a0a] border border-[#3de8c4]/5 p-4 rounded-sm flex gap-3 text-xs text-white/40 backdrop-blur-sm">
-                <AlertCircle className="h-4 w-4 text-[#3de8c4] shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-white font-serif italic text-sm mb-1">Interactive Assistant</p>
-                  <p>Speak to NIMO using the microphone or type commands directly into the terminal below. If voice captures are blocked, type your query!</p>
-                </div>
-              </div>
-
-              {/* EMO Robot Head Visual Architecture */}
-              <div className="relative flex items-center justify-center scale-100 sm:scale-110 lg:scale-120">
-                {/* Headphone arch strap (gorgeous extra design detail mimicking the photo) */}
-                <div className="absolute -top-5 w-[240px] h-[80px] rounded-t-[120px] border-t-8 border-x-4 border-t-[#f3f4f6] border-x-transparent z-0 pointer-events-none opacity-90 shadow-[0_-2px_10px_rgba(0,0,0,0.1)]" />
-
-                {/* Ear Tabs left */}
-                <div className={`absolute -left-[16px] w-[20px] h-[52px] rounded-l-md border-l border-y border-[#d4d4d8] z-0 bg-[#e4e4e7] ${
-                  faceState === 'error' ? 'face-shake bg-status-error/10' : ''
-                }`} />
-
-                {/* Main Hardware Outer Shell */}
-                <div className={`
-                  relative w-[280px] h-[280px] bg-gradient-to-b from-[#fbfbfc] to-[#f3f4f6] border border-[#e4e4e7] rounded-[32px] flex items-center justify-center z-10 shadow-[0_20px_50px_rgba(0,0,0,0.4),0_0_30px_rgba(61,232,196,0.05)] transition-all duration-300
-                  ${faceState === 'error' ? 'face-shake border-status-error/30 ring-1 ring-status-error/10' : ''}
-                  ${faceState === 'happy' ? 'border-status-happy/30' : ''}
-                  ${faceState === 'music' ? 'border-status-music/30' : ''}
-                `}>
-                  {/* Glass Inner Screen */}
-                  <div className="relative w-[232px] h-[232px] bg-[#06080c] rounded-[22px] overflow-hidden flex flex-col items-center justify-center border border-[#1e293b]">
-                    
-                    {/* Gloss / Sheen Highlight Overlays */}
-                    <div className="absolute top-0 left-0 right-0 h-1/2 bg-gradient-to-b from-white/2 to-transparent pointer-events-none rounded-t-[22px]" />
-                    
-                    {/* Eyes and Expression Screen */}
-                    <div className="flex flex-col items-center justify-center h-full w-full gap-4 pt-4">
-                      
-                      {/* Interactive Eye Elements Container */}
-                      <div className={`
-                        flex gap-8 items-center transition-all duration-300
-                        ${faceState === 'listening' ? 'listening-glow' : ''}
-                        ${faceState === 'thinking' ? '-translate-y-2' : ''}
-                      `}>
-                        {/* Eye Left */}
-                        <div 
-                          className={`
-                            relative rounded-[14px] transition-all duration-300 ease-out
-                            ${faceState === 'idle' ? 'w-[64px] h-[80px] blinking eye-idle' : ''}
-                            ${faceState === 'listening' ? 'w-[64px] h-[88px] eye-listening' : ''}
-                            ${faceState === 'thinking' ? 'w-[64px] h-[38px] rounded-t-[14px] rounded-b-[4px] eye-thinking' : ''}
-                            ${faceState === 'talking' ? 'w-[64px] h-[80px] eye-talking eye-idle' : ''}
-                            ${faceState === 'happy' ? 'w-[72px] h-[68px] rounded-t-[40px] rounded-b-[4px] eye-happy' : ''}
-                            ${faceState === 'confused' ? 'w-[52px] h-[72px] rounded-t-[14px] rounded-b-[4px] -rotate-6 eye-confused' : ''}
-                            ${faceState === 'error' ? 'w-[64px] h-[16px] rounded-[4px] eye-error' : ''}
-                            ${faceState === 'music' ? 'w-[64px] h-[80px] rounded-[20px] eye-music eye-music-glow' : ''}
-                          `}
-                        >
-                          {/* Inner Reflection Highlights */}
-                          {faceState !== 'error' && (
-                            <div className="absolute top-1.5 left-1/2 -translate-x-1/2 w-8 h-3 bg-white/20 rounded-full blur-[0.5px]" />
-                          )}
-                        </div>
-
-                        {/* Eye Right */}
-                        <div 
-                          className={`
-                            relative rounded-[14px] transition-all duration-300 ease-out
-                            ${faceState === 'idle' ? 'w-[64px] h-[80px] blinking eye-idle' : ''}
-                            ${faceState === 'listening' ? 'w-[64px] h-[88px] eye-listening' : ''}
-                            ${faceState === 'thinking' ? 'w-[64px] h-[80px] eye-thinking' : ''}
-                            ${faceState === 'talking' ? 'w-[64px] h-[80px] eye-talking eye-idle' : ''}
-                            ${faceState === 'happy' ? 'w-[72px] h-[68px] rounded-t-[40px] rounded-b-[4px] eye-happy' : ''}
-                            ${faceState === 'confused' ? 'w-[64px] h-[60px] rounded-t-[4px] rounded-b-[14px] rotate-6 eye-confused' : ''}
-                            ${faceState === 'error' ? 'w-[64px] h-[16px] rounded-[4px] eye-error' : ''}
-                            ${faceState === 'music' ? 'w-[64px] h-[80px] rounded-[20px] eye-music eye-music-glow' : ''}
-                          `}
-                        >
-                          {/* Inner Reflection Highlights */}
-                          {faceState !== 'error' && (
-                            <div className="absolute top-1.5 left-1/2 -translate-x-1/2 w-8 h-3 bg-white/20 rounded-full blur-[0.5px]" />
-                          )}
-                        </div>
-                      </div>
-
-                      {/* SVG Interactive Morphing Mouth */}
-                      <div className={`transition-all duration-300 h-6 flex items-center justify-center ${
-                        faceState === 'idle' || faceState === 'listening' || faceState === 'thinking' ? 'opacity-0 scale-75' : 'opacity-100 scale-100'
-                      }`}>
-                        <svg width="40" height="20" viewBox="0 0 40 20" fill="none" className="transition-all duration-300">
-                          {faceState === 'talking' && (
-                            <path d="M5 10 Q20 4 35 10" stroke="#3de8c4" strokeWidth="3" strokeLinecap="round" />
-                          )}
-                          {faceState === 'happy' && (
-                            <path d="M8 5 Q20 18 32 5" stroke="#3de8c4" strokeWidth="3.5" strokeLinecap="round" />
-                          )}
-                          {faceState === 'error' && (
-                            <path d="M10 15 Q20 5 30 15" stroke="#ef4444" strokeWidth="3" strokeLinecap="round" />
-                          )}
-                          {faceState === 'confused' && (
-                            <path d="M8 10 Q14 5 20 10 T32 10" stroke="#f59e0b" strokeWidth="3" strokeLinecap="round" />
-                          )}
-                          {faceState === 'music' && (
-                            <circle cx="20" cy="10" r="6" stroke="#a855f7" strokeWidth="3" fill="transparent" />
-                          )}
-                        </svg>
-                      </div>
-
-                    </div>
-                  </div>
-                </div>
-
-                {/* Ear Tabs right */}
-                <div className={`absolute -right-[16px] w-[20px] h-[52px] rounded-r-md border-r border-y border-[#d4d4d8] z-0 bg-[#e4e4e7] ${
-                  faceState === 'error' ? 'face-shake bg-status-error/10' : ''
-                }`} />
-              </div>
-
-              {/* Manual Command Terminal Bar */}
-              <form onSubmit={handleManualSubmit} className="w-full max-w-md bg-black border border-[#3de8c4]/30 rounded-sm p-3.5 flex items-center gap-2 focus-within:border-[#3de8c4]/60 transition-all duration-200 shadow-[0_0_8px_rgba(61,232,196,0.05)]">
-                <span className="font-mono text-xs text-[#3de8c4] pl-1 uppercase font-semibold">nimo$</span>
-                <input
-                  type="text"
-                  value={manualInput}
-                  onChange={(e) => setManualInput(e.target.value)}
-                  placeholder="Ask a question or enter local commands..."
-                  className="flex-grow bg-transparent text-xs text-white border-none outline-none focus:ring-0 placeholder:text-white/10"
-                  disabled={faceState === 'thinking'}
-                />
-                <button
-                  type="submit"
-                  disabled={faceState === 'thinking' || manualInput.trim() === ""}
-                  className="p-1.5 rounded-sm bg-white/5 text-[#3de8c4]/70 hover:text-[#3de8c4] hover:bg-[#3de8c4]/10 active:scale-95 disabled:opacity-35 transition-all"
-                >
-                  <Send className="h-3.5 w-3.5" />
-      </button>
-      </form>
-
-{/* Live transcript bubble */}
-{voiceEnabled && liveTranscript && (
-  <div className="w-full max-w-md text-[11px] font-mono text-white/50 italic truncate pl-1 tracking-wide leading-relaxed">
-    heard: "{liveTranscript}"
-  </div>
-)}
-
-{/* Inline web-search results */}
-{searchResults.length > 0 && (
-  <div className="w-full max-w-md bg-[#0a0a0a] border border-white/5 rounded-sm overflow-hidden">
-    <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-white/5 bg-white/[0.02]">
-      <Globe className="h-3.5 w-3.5 text-emerald-400" />
-      <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40">
-        Web Results{searchResultsQuery ? ` · ${searchResultsQuery}` : ""}
-      </span>
-    </div>
-    <ul className="flex flex-col divide-y divide-white/5 max-h-72 overflow-y-auto custom-scrollbar">
-      {searchResults.map((r, i) => (
-        <li key={i} className="p-3.5 hover:bg-white/[0.03] transition-colors">
-          <a
-            href={r.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="block group"
-          >
-            <p className="text-xs text-[#3de8c4]/90 font-medium leading-snug group-hover:underline decoration-[#3de8c4]/40">
-              {r.title}
-            </p>
-            <p className="text-[10px] text-white/40 font-mono truncate mt-0.5">{r.url}</p>
-            {r.snippet && (
-              <p className="text-[11px] text-white/50 leading-relaxed mt-1.5 line-clamp-2">{r.snippet}</p>
-            )}
-          </a>
-        </li>
-      ))}
-    </ul>
-  </div>
-)}
-
-              {/* Active countdown timers if any */}
-              {backendTimers.length > 0 && (
-                <div className="w-full max-w-md flex flex-col gap-2">
-                  <p className="font-mono text-[10px] text-white/30 uppercase tracking-[0.2em] pl-1 flex items-center gap-1.5">
-                    <Clock className="h-3 w-3 animate-spin text-[#3de8c4]" />
-                    Active Countdown Timers
-                  </p>
-                  {backendTimers.map(timer => (
-                    <div key={timer.id} className="bg-[#0a0a0a] border border-[#3de8c4]/5 p-3.5 rounded-sm flex items-center justify-between">
-                      <div className="flex flex-col gap-0.5">
-                        <span className="text-xs text-white/80 font-medium">{timer.label}</span>
-                        <span className="font-mono text-[9px] text-white/30 uppercase tracking-wider">Active Node Countdown</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-xs text-[#3de8c4] font-bold bg-[#3de8c4]/10 px-2.5 py-1 rounded-sm border border-[#3de8c4]/20">{timer.remaining}s</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              {needsClarification && (
+                <p className="mb-1.5 flex items-center justify-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400">
+                  <Radio className="h-3 w-3 animate-pulse" /> NIMO needs your answer
+                </p>
               )}
-
-              {/* Hidden YouTube IFrame player target */}
-              <div className="hidden">
-                <div id="nimo-yt-player" />
-              </div>
-            </motion.div>
-          )}
-
-          {activeTab === "logs" && (
-            <motion.div
-              key="logs-view"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="flex-grow flex flex-col gap-6"
-            >
-              <div className="flex items-center justify-between border-b border-white/5 pb-4">
-                <div>
-                  <h2 className="text-white font-serif italic text-2xl tracking-tight">System Log Buffer</h2>
-                  <p className="text-[10px] text-white/30 uppercase tracking-widest mt-1">Detailed historical log feed for system triggers, voice decibel, and API events.</p>
-                </div>
-                <button
-                  onClick={handleClearLogs}
-                  className="flex items-center gap-2 px-3.5 py-1.5 border border-red-500/20 text-red-400 text-[10px] font-mono uppercase tracking-wider rounded-sm hover:bg-red-500/10 transition-colors"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Clear Buffer
-                </button>
-              </div>
-
-              {/* Full Log Panel Table */}
-              <div className="flex-grow bg-[#0a0a0a] border border-white/5 rounded-sm overflow-hidden flex flex-col min-h-[400px]">
-                <div className="flex items-center gap-4 bg-white/[0.02] border-b border-white/5 p-3.5 font-mono text-[10px] text-white/30 uppercase tracking-widest">
-                  <div className="w-20 shrink-0">Timestamp</div>
-                  <div className="w-24 shrink-0">Source / Type</div>
-                  <div className="flex-grow">Event Log Text</div>
-                  <div className="w-24 shrink-0 text-right">Category</div>
-                </div>
-
-                <div className="flex-grow overflow-y-auto custom-scrollbar p-3 flex flex-col gap-2">
-                  {logsList.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-white/20 gap-2 py-12">
-                      <Terminal className="h-8 w-8 opacity-20" />
-                      <span className="text-xs uppercase font-mono tracking-wider">No entries in telemetry buffer.</span>
-                    </div>
-                  ) : (
-                    logsList.map((log) => {
-                      let catColor = "bg-neutral-800/50 text-neutral-400 border border-neutral-700/30";
-                      if (log.category === "voice") catColor = "bg-[#3de8c4]/10 text-[#3de8c4] border border-[#3de8c4]/20";
-                      if (log.category === "intent") catColor = "bg-blue-500/10 text-blue-400 border border-blue-500/20";
-                      if (log.category === "ai") catColor = "bg-white/5 text-white/80 border border-white/10";
-                      if (log.category === "action") catColor = "bg-[#3de8c4]/10 text-[#3de8c4] border border-[#3de8c4]/20";
-                      if (log.category === "error") catColor = "bg-red-500/10 text-red-400 border border-red-500/20";
-
-                      return (
-                        <div key={log.id} className="flex items-start gap-4 p-2.5 bg-white/[0.01] border border-white/[0.03] rounded-sm font-mono text-[11px] hover:bg-white/[0.02] transition-colors">
-                          <div className="w-20 text-white/30 py-0.5 shrink-0">{log.timestamp}</div>
-                          <div className="w-24 font-bold text-white/70 py-0.5 shrink-0">{log.type}</div>
-                          <div className="flex-grow text-white/60 py-0.5 break-all">{log.text}</div>
-                          <div className="w-24 shrink-0 flex justify-end">
-                            <span className={`px-2 py-0.5 rounded-sm text-[8px] uppercase font-bold tracking-wider ${catColor}`}>
-                              {log.category}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {activeTab === "personality" && (
-            <motion.div
-              key="personality-view"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="flex-grow flex flex-col gap-6"
-            >
-              <div className="border-b border-white/5 pb-4">
-                <h2 className="text-white font-serif italic text-2xl tracking-tight">Cognitive Temperament Weights</h2>
-                <p className="text-[10px] text-white/30 uppercase tracking-widest mt-1">Configure NIMO's emotional metrics, conversational system instructions, and witty responsiveness levels.</p>
-              </div>
-
-              {/* Cards for each personality */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {[
-                  {
-                    id: "friendly" as PersonalityTrait,
-                    name: "Friendly Companion",
-                    desc: "Warm, supportive, and cheerful. Ready to assist with positive reinforcement and helpful answers.",
-                    ratings: { wit: 40, kind: 95, sass: 10, logic: 80 }
-                  },
-                  {
-                    id: "sarcastic" as PersonalityTrait,
-                    name: "Sarcastic Bot",
-                    desc: "Dry humored, sassy, and incredibly witty. Speaks in ironies, slight sass, and quick clever retorts.",
-                    ratings: { wit: 95, kind: 50, sass: 95, logic: 85 }
-                  },
-                  {
-                    id: "robotic" as PersonalityTrait,
-                    name: "Mechanical System",
-                    desc: "Strictly logical, literal, and technical. Responds with precise indicators and mechanical vocabulary.",
-                    ratings: { wit: 30, kind: 40, sass: 20, logic: 100 }
-                  },
-                  {
-                    id: "dramatic" as PersonalityTrait,
-                    name: "Theatrical Star",
-                    desc: "Expressive, theatrical, and highly emotional. Uses grand gestures, hyperbole, and strong sentiment ratios.",
-                    ratings: { wit: 80, kind: 75, sass: 70, logic: 40 }
-                  },
-                  {
-                    id: "quiet" as PersonalityTrait,
-                    name: "Serene Minimalist",
-                    desc: "Calm, serene, and soft-spoken. Uses very few words, prioritizing peaceful simplicity and low frequencies.",
-                    ratings: { wit: 50, kind: 90, sass: 10, logic: 70 }
-                  }
-                ].map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => {
-                      setPersonality(p.id);
-                      postLog(`Personality modified: [${p.name.toUpperCase()}]`, "PERSONALITY", "info");
-                      speakMessage(`Personality modified to ${p.name}. Systems online.`, "happy");
-                    }}
-                    className={`p-5 rounded-sm border text-left flex flex-col gap-4 transition-all duration-300 ${
-                      personality === p.id
-                        ? "bg-[#0c0c0c] border-white/30 shadow-[0_0_15px_rgba(255,255,255,0.02)]"
-                        : "bg-[#0a0a0a] border-white/5 hover:border-white/20 hover:bg-white/[0.01]"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className={`font-serif italic text-sm ${personality === p.id ? "text-white font-semibold" : "text-white/60"}`}>{p.name}</span>
-                      {personality === p.id && (
-                        <span className="font-mono text-[8px] uppercase font-bold text-white bg-white/10 px-2 py-0.5 rounded-sm border border-white/10">Active Node</span>
-                      )}
-                    </div>
-                    <p className="text-xs text-white/40 flex-grow leading-relaxed font-sans">{p.desc}</p>
-                    
-                    {/* Trait meters */}
-                    <div className="flex flex-col gap-2 mt-2 w-full">
-                      {[
-                        { label: "Witty", value: p.ratings.wit },
-                        { label: "Kindness", value: p.ratings.kind },
-                        { label: "Sarcasm", value: p.ratings.sass },
-                        { label: "Logic", value: p.ratings.logic }
-                      ].map(trait => (
-                        <div key={trait.label} className="flex flex-col gap-1 w-full">
-                          <div className="flex justify-between text-[8px] font-mono uppercase tracking-wider text-white/30">
-                            <span>{trait.label}</span>
-                            <span>{trait.value}%</span>
-                          </div>
-                          <div className="h-1 bg-white/5 rounded-full overflow-hidden w-full">
-                            <div 
-                              className={`h-full rounded-full transition-all duration-500 ${
-                                personality === p.id ? "bg-white/60" : "bg-white/10"
-                              }`}
-                              style={{ width: `${trait.value}%` }}
-                            />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </motion.div>
-          )}
-
-          {activeTab === "sensors" && (
-            <motion.div
-              key="sensors-view"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.2 }}
-              className="flex-grow flex flex-col gap-6"
-            >
-              <div className="border-b border-white/5 pb-4">
-                <h2 className="text-white font-serif italic text-2xl tracking-tight">Hardware & Telemetry Sensors</h2>
-                <p className="text-[10px] text-white/30 uppercase tracking-widest mt-1">Real-time status indicators representing decibel inputs, processor frequencies, and circuit temperature.</p>
-              </div>
-
-              {/* Bento Grid layout of telemetry metrics */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                
-                {/* CPU Metric */}
-                <div className="bg-[#0a0a0a] border border-white/5 p-5 rounded-sm flex items-center gap-4">
-                  <div className="h-10 w-10 shrink-0 rounded-sm bg-black border border-white/5 flex items-center justify-center text-white/60">
-                    <Cpu className="h-5 w-5 animate-pulse" />
-                  </div>
-                  <div className="flex-grow">
-                    <span className="font-mono text-[9px] uppercase tracking-wider text-white/30">Processor Core</span>
-                    <h3 className="text-xl font-mono font-bold text-white/80 mt-0.5">{systemMetrics.cpuUsage}%</h3>
-                    <div className="h-1 bg-white/5 rounded-full mt-2 overflow-hidden">
-                      <div className="h-full bg-white/60 transition-all duration-1000" style={{ width: `${systemMetrics.cpuUsage}%` }} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Memory Metric */}
-                <div className="bg-[#0a0a0a] border border-white/5 p-5 rounded-sm flex items-center gap-4">
-                  <div className="h-10 w-10 shrink-0 rounded-sm bg-black border border-white/5 flex items-center justify-center text-white/60">
-                    <Database className="h-5 w-5" />
-                  </div>
-                  <div className="flex-grow">
-                    <span className="font-mono text-[9px] uppercase tracking-wider text-white/30">Buffer Cache</span>
-                    <h3 className="text-xl font-mono font-bold text-white/80 mt-0.5">{systemMetrics.memoryUsage}%</h3>
-                    <div className="h-1 bg-white/5 rounded-full mt-2 overflow-hidden">
-                      <div className="h-full bg-white/50 transition-all duration-1000" style={{ width: `${systemMetrics.memoryUsage}%` }} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Temp Metric */}
-                <div className="bg-[#0a0a0a] border border-white/5 p-5 rounded-sm flex items-center gap-4">
-                  <div className="h-10 w-10 shrink-0 rounded-sm bg-black border border-white/5 flex items-center justify-center text-white/60">
-                    <Zap className="h-5 w-5" />
-                  </div>
-                  <div className="flex-grow">
-                    <span className="font-mono text-[9px] uppercase tracking-wider text-white/30">Motherboard Temp</span>
-                    <h3 className="text-xl font-mono font-bold text-white/80 mt-0.5">{systemMetrics.temperature}°C</h3>
-                    <div className="h-1 bg-white/5 rounded-full mt-2 overflow-hidden">
-                      <div className="h-full bg-white/60 transition-all duration-1000" style={{ width: `${(systemMetrics.temperature / 100) * 100}%` }} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Signals strength */}
-                <div className="bg-[#0a0a0a] border border-white/5 p-5 rounded-sm flex items-center gap-4">
-                  <div className="h-10 w-10 shrink-0 rounded-sm bg-black border border-white/5 flex items-center justify-center text-white/60">
-                    <Wifi className="h-5 w-5" />
-                  </div>
-                  <div className="flex-grow">
-                    <span className="font-mono text-[9px] uppercase tracking-wider text-white/30">Antenna Signal</span>
-                    <h3 className="text-xl font-mono font-bold text-white/80 mt-0.5">{systemMetrics.signalStrength}%</h3>
-                    <div className="h-1 bg-white/5 rounded-full mt-2 overflow-hidden">
-                      <div className="h-full bg-white/50 transition-all duration-1000" style={{ width: `${systemMetrics.signalStrength}%` }} />
-                    </div>
-                  </div>
-                </div>
-
-              </div>
-
-              {/* Sub grid for complex scanners */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                
-                {/* Decibel audio wave monitor */}
-                <div className="bg-[#0a0a0a] border border-white/5 p-5 rounded-sm flex flex-col gap-4">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h4 className="text-sm font-serif italic text-white/80">Mic Input Waveforms</h4>
-                      <p className="text-[10px] text-white/30 mt-0.5">Capturing raw environmental noise waveforms.</p>
-                    </div>
-                    <span className="font-mono text-[10px] text-emerald-500 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1 rounded-sm uppercase font-bold tracking-wider">
-                      {systemMetrics.decibelLevel} dB
-                    </span>
-                  </div>
-
-                  {/* Simulated equalizer waves */}
-                  <div className="h-28 flex items-end justify-center gap-1.5 bg-black border border-white/5 rounded-sm p-3">
-                    {Array.from({ length: 32 }).map((_, i) => {
-                      // Heights dynamic to match talk states
-                      const baseMultiplier = faceState === 'talking' ? 1.5 : 0.2;
-                      const noise = Math.sin(i / 2) * 20 + 35;
-                      const factor = baseMultiplier * (noise + Math.floor(Math.random() * 20));
-                      const height = Math.max(5, Math.min(100, factor));
-
-                      return (
-                        <div
-                          key={i}
-                          className="flex-grow rounded-full transition-all duration-200"
-                          style={{
-                            height: `${height}%`,
-                            background: `linear-gradient(to top, rgba(255,255,255,0.01), rgba(255,255,255,0.6))`
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Radar Grid Scanner */}
-                <div className="bg-[#0a0a0a] border border-white/5 p-5 rounded-sm flex flex-col gap-4">
-                  <div>
-                    <h4 className="text-sm font-serif italic text-white/80">Cybernetic Radar Sweep</h4>
-                    <p className="text-[10px] text-white/30 mt-0.5">Scoping ambient local coordinate anomalies.</p>
-                  </div>
-
-                  <div className="h-28 bg-black border border-white/5 rounded-sm p-3 relative overflow-hidden flex items-center justify-center">
-                    
-                    {/* Rotating grid overlay line */}
-                    <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-white/5 via-transparent to-transparent" />
-                    <div className="w-24 h-24 border border-white/10 rounded-full flex items-center justify-center">
-                      <div className="w-16 h-16 border border-white/5 rounded-full flex items-center justify-center">
-                        <div className="w-8 h-8 border border-white/5 rounded-full" />
-                      </div>
-                    </div>
-                    <div className="absolute top-1/2 left-4 right-4 h-px bg-white/5" />
-                    <div className="absolute left-1/2 top-4 bottom-4 w-px bg-white/5" />
-
-                    {/* Sweep hand rotation */}
-                    <div className="absolute w-28 h-28 border-l border-white/20 origin-center rounded-full animate-spin" style={{ animationDuration: '6s' }} />
-
-                    <div className="absolute font-mono text-[9px] text-white/30 top-2 left-2 uppercase tracking-wider">Target: 0</div>
-                    <div className="absolute font-mono text-[9px] text-white/30 bottom-2 right-2 uppercase tracking-wider">Uptime: {formatUptime(systemMetrics.uptime)}</div>
-                  </div>
-                </div>
-
-              </div>
+              {busy ? (
+                <span className="flex justify-center gap-1.5 py-1.5">
+                  {[0, 1, 2].map((i) => (
+                    <span key={i} className="h-2 w-2 rounded-full bg-[#a9b8ff]" style={{ animation: `thinkBounce 0.9s ${i * 0.15}s infinite` }} />
+                  ))}
+                </span>
+              ) : (
+                caption
+              )}
             </motion.div>
           )}
         </AnimatePresence>
-        </div>
+      </div>
 
-      </main>
-
-      {/* Right Sidebar Logs Snip */}
+      {/* ═══ Timer notifications ═══ */}
       <AnimatePresence>
-        {showLogsSidebar && (
-          <motion.aside
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 320, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="fixed md:relative top-0 right-0 bottom-0 border-l border-outline-variant bg-[#0a0a0a] flex flex-col z-40 overflow-hidden shrink-0 h-screen shadow-2xl md:shadow-none"
+        {timerNotifications.map((notif) => (
+          <motion.div key={notif.id}
+            initial={{ opacity: 0, y: -40, scale: 0.9 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -20, scale: 0.95 }}
+            className="glass absolute left-1/2 top-5 z-[80] flex -translate-x-1/2 items-center gap-3 rounded-2xl px-5 py-3"
           >
-            {/* Wrapper with fixed width to prevent text wrap jank during animation */}
-            <div className="w-80 p-6 flex flex-col h-full flex-grow overflow-hidden">
-              <div className="flex items-center justify-between mb-4 border-b border-white/5 pb-3 shrink-0">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-1.5 w-1.5 rounded-full bg-[#3de8c4] shadow-[0_0_8px_rgba(61,232,196,0.4)] animate-pulse"></span>
-                  <h2 className="font-mono text-[9px] uppercase tracking-[0.2em] text-white/30">Live Event Log</h2>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[8px] text-[#3de8c4] bg-[#3de8c4]/10 border border-[#3de8c4]/20 px-2.5 py-0.5 rounded-sm font-bold uppercase tracking-wider">Sync OK</span>
-                  <button 
-                    onClick={() => setShowLogsSidebar(false)}
-                    className="md:hidden text-white/40 hover:text-white transition-colors"
-                  >
-                    ×
-                  </button>
-                </div>
+            <Bell className="h-4 w-4 animate-bounce text-[#5eead4]" />
+            <span className="text-xs font-semibold text-white">{notif.label} is done!</span>
+            <button onClick={() => setTimerNotifications((prev) => prev.filter((n) => n.id !== notif.id))} className="text-white/40 hover:text-white"><X className="h-3.5 w-3.5" /></button>
+          </motion.div>
+        ))}
+      </AnimatePresence>
+
+      {/* ═══ Top bar ═══ */}
+      <header
+        className="absolute inset-x-0 top-0 z-30 flex items-center justify-between px-6 py-4"
+        style={isElectron ? ({ WebkitAppRegion: "drag" } as React.CSSProperties) : undefined}
+      >
+        <div className="flex items-center gap-3">
+          <span className="font-serif text-2xl italic tracking-tight text-white">Nimo.</span>
+          <span className={`glass-soft flex items-center gap-1.5 rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] ${needsClarification ? "text-amber-300" : "text-white/60"}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${
+              faceState === "listening" ? "animate-pulse bg-[#5eead4]" :
+              faceState === "thinking" ? "animate-pulse bg-[#93c5fd]" :
+              faceState === "error" ? "bg-red-400" :
+              faceState === "confused" ? "bg-amber-400" :
+              faceState === "music" ? "bg-purple-400" : "bg-[#8b9bf6]"
+            }`} />
+            {STATUS_TEXT[faceState]}
+          </span>
+          {voiceEnabled && transcript && (
+            <span className="glass-soft hidden max-w-[280px] truncate rounded-full px-3 py-1 text-[10px] italic text-white/50 md:block">“{transcript}”</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5" style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}>
+          {isElectron && iconBtn(
+            companionVisible ? "Hide floating companion" : "Show floating companion",
+            companionVisible,
+            toggleCompanion,
+            companionVisible ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />
+          )}
+          {iconBtn("Voice", voiceEnabled, () => { setVoiceEnabled(!voiceEnabled); if (!voiceEnabled) speak("Voice activated. Say hey NIMO!", "happy"); }, voiceEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4" />)}
+          {iconBtn("Tools", leftDock === "tools", () => setLeftDock(leftDock === "tools" ? null : "tools"), <Wand2 className="h-4 w-4" />)}
+          {iconBtn("Settings", leftDock === "settings", () => setLeftDock(leftDock === "settings" ? null : "settings"), <Settings className="h-4 w-4" />)}
+          {/* One dock, two tabs: agent activity + live logs */}
+          {iconBtn("Agent activity & logs", rightDock !== null, () => setRightDock(rightDock === null ? "activity" : null), <Sparkles className="h-4 w-4" />)}
+          {iconBtn(isFullscreen ? "Exit fullscreen" : "Fullscreen", isFullscreen, toggleFullscreen, isFullscreen ? <Minimize className="h-4 w-4" /> : <Maximize className="h-4 w-4" />)}
+          {isElectron && (
+            <>
+              <span className="mx-1 h-5 w-px bg-white/10" />
+              <button onClick={() => bridge?.windowControl?.("minimize")} className="rounded-xl p-2 text-white/40 hover:bg-white/10 hover:text-white" title="Minimize"><Minus className="h-4 w-4" /></button>
+              <button onClick={() => bridge?.windowControl?.("close")} className="rounded-xl p-2 text-white/40 hover:bg-red-500/20 hover:text-red-300" title="Hide to tray"><X className="h-4 w-4" /></button>
+            </>
+          )}
+        </div>
+      </header>
+
+      {/* ═══ Right dock: Agent activity / Logs ═══ */}
+      <AnimatePresence>
+        {rightDock && (
+          <motion.aside key={rightDock}
+            initial={{ x: 60, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: 60, opacity: 0 }} transition={{ duration: 0.22 }}
+            className="glass slide-in-right absolute bottom-24 right-5 top-20 z-30 flex w-[400px] flex-col rounded-3xl p-5"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex gap-1.5">
+                <button onClick={() => setRightDock("activity")} className={`rounded-full px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${rightDock === "activity" ? "bg-[#6d7ef2]/25 text-[#a9b8ff]" : "text-white/40 hover:text-white"}`}>Agent activity</button>
+                <button onClick={() => setRightDock("logs")} className={`rounded-full px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${rightDock === "logs" ? "bg-[#6d7ef2]/25 text-[#a9b8ff]" : "text-white/40 hover:text-white"}`}>Live logs</button>
               </div>
+              <button onClick={() => setRightDock(null)} className="text-white/40 hover:text-white"><X className="h-4 w-4" /></button>
+            </div>
 
-              {/* Scrollable logs list */}
-              <div className="flex-grow flex flex-col gap-3 font-mono text-[11px] text-white/40 overflow-y-auto custom-scrollbar pr-1">
-                {logsList.length === 0 ? (
-                  <div className="h-full flex items-center justify-center text-white/20 py-12 text-[10px] uppercase tracking-wider select-none">
-                    Initializing feed...
-                  </div>
-                ) : (
-                  logsList.map((log) => {
-                    const textClass = log.category === "error" ? "text-red-400/90" : 
-                                      log.category === "voice" ? "text-[#3de8c4]/90" :
-                                      log.category === "intent" ? "text-blue-400/90" :
-                                      "text-white/50";
-
-                    return (
-                      <div key={log.id} className="border-l border-white/5 pl-2.5 py-1 flex flex-col gap-0.5 shrink-0 hover:bg-white/[0.01] transition-colors rounded-sm">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] text-white/20">[{log.timestamp}]</span>
-                          <span className="text-[8px] font-bold text-white/60 tracking-wider uppercase">[{log.type}]</span>
-                        </div>
-                        <span className={`${textClass} break-words leading-relaxed`}>{log.text}</span>
+            {rightDock === "activity" ? (
+              <div className="flex-grow space-y-3 overflow-y-auto custom-scrollbar pr-1">
+                {/* Approval card — NIMO asks before critical writes */}
+                <AnimatePresence>
+                  {pendingApproval && (
+                    <motion.div
+                      initial={{ opacity: 0, scale: 0.96 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.97 }}
+                      className="rounded-2xl border border-amber-400/50 bg-gradient-to-b from-[#2a1d05]/90 to-[#150d02]/90 p-4"
+                    >
+                      <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.2em] text-amber-400">
+                        <Radio className="h-3 w-3 animate-pulse" /> Approval needed
+                      </p>
+                      <p className="mt-1.5 text-[12px] leading-relaxed text-amber-100">{pendingApproval.summary}</p>
+                      {pendingApproval.path && (
+                        <p className="mt-1 truncate font-mono text-[10px] text-amber-200/60">{pendingApproval.path}</p>
+                      )}
+                      {pendingApproval.preview && (
+                        <pre className="mt-2 max-h-24 overflow-y-auto custom-scrollbar whitespace-pre-wrap rounded-lg bg-black/50 p-2 font-mono text-[10px] text-amber-200/80">{pendingApproval.preview}</pre>
+                      )}
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          onClick={() => approve(pendingApproval.id, true)}
+                          disabled={busy}
+                          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-[#5eead4]/15 py-2 text-[11px] font-bold uppercase tracking-wider text-[#5eead4] transition-all hover:bg-[#5eead4]/25 active:scale-95 disabled:opacity-40"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" /> Approve
+                        </button>
+                        <button
+                          onClick={() => approve(pendingApproval.id, false)}
+                          disabled={busy}
+                          className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-red-500/10 py-2 text-[11px] font-bold uppercase tracking-wider text-red-300 transition-all hover:bg-red-500/20 active:scale-95 disabled:opacity-40"
+                        >
+                          <XCircle className="h-3.5 w-3.5" /> Decline
+                        </button>
                       </div>
-                    );
-                  })
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* NIMO's answer — ChatGPT-style markdown block */}
+                {lastAgentText && (
+                  <div className="rounded-2xl border border-[#6d7ef2]/25 bg-gradient-to-br from-[#0d1b3d]/80 to-[#0a0f24]/80 p-4">
+                    <p className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-[#8fc1ff]">
+                      <Sparkles className="h-3 w-3" /> NIMO{voiceEngine === "elevenlabs" ? " · elevenlabs voice" : ""}
+                    </p>
+                    <Markdown text={lastAgentText} className="text-[12.5px] text-white/85" />
+                  </div>
                 )}
-                <div ref={logsEndRef} />
+
+                {/* Agent steps timeline */}
+                {steps.length > 0 && (
+                  <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/35">What NIMO did</p>
+                    <ol className="mt-2.5 space-y-2">
+                      {steps.map((s, i) => (
+                        <li key={i} className="flex items-center gap-2.5 text-[12px]">
+                          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/[0.06] text-sm">
+                            {TOOL_EMOJI[s.tool] || "✨"}
+                          </span>
+                          <span className="text-white/70">{s.summary}</span>
+                          {s.ok ? <CheckCircle2 className="ml-auto h-3.5 w-3.5 shrink-0 text-[#5eead4]/70" /> : <XCircle className="ml-auto h-3.5 w-3.5 shrink-0 text-red-400/70" />}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                )}
+
+                {/* Rich cards */}
+                {cards.map((c, i) => renderCard(c, i))}
+
+                {steps.length === 0 && cards.length === 0 && !lastAgentText && !pendingApproval && (
+                  <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-white/25">
+                    <MoonStar className="h-7 w-7 opacity-40" />
+                    <p className="text-[11px] uppercase tracking-[0.18em]">Ask NIMO anything —<br />its answers and work show up here.</p>
+                  </div>
+                )}
               </div>
+            ) : (
+              <div className="flex-grow overflow-y-auto custom-scrollbar pr-1 font-mono text-[11px]">
+                {logsList.length === 0 ? (
+                  <div className="flex h-full items-center justify-center text-[10px] uppercase tracking-wider text-white/20">No entries yet…</div>
+                ) : (
+                  <div className="space-y-1">
+                    {logsList.map((log) => {
+                      const cls =
+                        log.category === "error" ? "text-red-400/90" :
+                        log.category === "voice" ? "text-[#5eead4]/90" :
+                        log.category === "ai" ? "text-[#a9b8ff]/90" :
+                        log.category === "action" ? "text-[#c4b5fd]/90" : "text-white/45";
+                      return (
+                        <div key={log.id} className="flex items-start gap-2 rounded-lg px-2 py-1 hover:bg-white/[0.03]">
+                          <span className="shrink-0 text-white/20">{log.timestamp}</span>
+                          <span className="w-14 shrink-0 font-bold text-white/45">{log.type}</span>
+                          <span className={`${cls} break-all`}>{log.text}</span>
+                        </div>
+                      );
+                    })}
+                    <div ref={logsEndRef} />
+                  </div>
+                )}
+              </div>
+            )}
+          </motion.aside>
+        )}
+      </AnimatePresence>
+
+      {/* ═══ Left dock: Tools / Settings ═══ */}
+      <AnimatePresence>
+        {leftDock && (
+          <motion.aside key={leftDock}
+            initial={{ x: -60, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -60, opacity: 0 }} transition={{ duration: 0.22 }}
+            className="glass slide-in-left absolute bottom-24 left-5 top-20 z-30 flex w-[380px] flex-col rounded-3xl p-5"
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <div className="flex gap-1.5">
+                <button onClick={() => setLeftDock("tools")} className={`rounded-full px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${leftDock === "tools" ? "bg-[#6d7ef2]/25 text-[#a9b8ff]" : "text-white/40 hover:text-white"}`}>OS tools</button>
+                <button onClick={() => setLeftDock("settings")} className={`rounded-full px-3.5 py-1.5 text-[10px] font-bold uppercase tracking-[0.14em] transition-all ${leftDock === "settings" ? "bg-[#6d7ef2]/25 text-[#a9b8ff]" : "text-white/40 hover:text-white"}`}>Settings</button>
+              </div>
+              <button onClick={() => setLeftDock(null)} className="text-white/40 hover:text-white"><X className="h-4 w-4" /></button>
+            </div>
+
+            <div className="flex-grow space-y-4 overflow-y-auto custom-scrollbar pr-1">
+              {leftDock === "tools" ? (
+                <>
+                  {/* Apps */}
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-white/40"><AppWindow className="h-3.5 w-3.5" /> Installed apps</p>
+                      <input value={appFilter} onChange={(e) => setAppFilter(e.target.value)} placeholder="filter…" className="w-28 rounded-lg border border-white/10 bg-black/40 px-2.5 py-1 text-[11px] outline-none focus:border-[#6d7ef2]/60" />
+                    </div>
+                    <div className="mt-2 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto custom-scrollbar">
+                      {installedApps
+                        .filter((a) => !appFilter.trim() || a.name.toLowerCase().includes(appFilter.trim().toLowerCase()))
+                        .map((a, i) => (
+                          <button key={i} onClick={() => submitCommand(`open ${a.name}`)} title={a.folder}
+                            className="rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1.5 text-[11px] text-white/65 transition-all hover:border-[#6d7ef2]/50 hover:text-white">
+                            {a.name}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                  {/* Files */}
+                  <form onSubmit={runFileSearch} className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                    <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-white/40"><FolderSearch className="h-3.5 w-3.5" /> Find files (read-only)</p>
+                    <div className="mt-2.5 flex gap-2">
+                      <input value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} placeholder="file name…" className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[12px] outline-none focus:border-[#6d7ef2]/60" />
+                      <select value={fileFolder} onChange={(e) => setFileFolder(e.target.value)} className="rounded-xl border border-white/10 bg-black/40 px-2 text-[12px] outline-none">
+                        <option value="">Anywhere</option>
+                        <option value="Desktop">Desktop</option>
+                        <option value="Documents">Documents</option>
+                        <option value="Downloads">Downloads</option>
+                        <option value="Pictures">Pictures</option>
+                      </select>
+                      <button type="submit" disabled={fileSearching} className="rounded-xl bg-[#6d7ef2]/20 px-3 text-[#a9b8ff] transition-all hover:bg-[#6d7ef2]/30 disabled:opacity-40">
+                        {fileSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderSearch className="h-4 w-4" />}
+                      </button>
+                    </div>
+                    {fileHits.length > 0 && (
+                      <ul className="mt-3 max-h-40 space-y-1.5 overflow-y-auto custom-scrollbar">
+                        {fileHits.map((f, i) => (
+                          <li key={i} className="rounded-lg bg-white/[0.04] px-2.5 py-1.5">
+                            <p className="text-[12px] text-white/85">{f.name}</p>
+                            <p className="truncate font-mono text-[10px] text-white/35">{f.path}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </form>
+                  <button onClick={takeScreenshot} className="flex w-full items-center justify-center gap-2.5 rounded-2xl border border-white/10 bg-black/30 p-3.5 text-[12px] text-white/65 transition-all hover:border-[#6d7ef2]/50 hover:text-white">
+                    <Camera className="h-4 w-4 text-[#a9b8ff]" /> Capture screen → Pictures (never uploaded)
+                  </button>
+                  <div className="rounded-2xl border border-[#5eead4]/20 bg-[#5eead4]/[0.05] p-3.5 text-[11px] leading-relaxed text-white/50">
+                    <p className="mb-1 font-semibold text-[#5eead4]">🛡 Safety envelope</p>
+                    NIMO reads files, launches apps and can now <span className="text-white/75">create and edit text files in your own folders</span> and even type into the app you have focused. Every critical write passes a safety core (hard rules + AI judgment) and <span className="text-white/75">asks for your approval first</span>. It never deletes files and never downloads anything.
+                  </div>
+                </>
+              ) : (
+                <>
+                  {/* Mood */}
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Mood · how NIMO talks</p>
+                    <div className="mt-2 grid grid-cols-2 gap-2">
+                      {([
+                        ["friendly", "Friendly", "😊"], ["sarcastic", "Sarcastic", "😏"],
+                        ["robotic", "Robotic", "🤖"], ["dramatic", "Dramatic", "🎭"],
+                        ["quiet", "Serene", "🌙"]
+                      ] as Array<[PersonalityTrait, string, string]>).map(([id, name, emoji]) => (
+                        <button key={id} onClick={() => choosePersonality(id, name)}
+                          className={`flex items-center gap-2 rounded-2xl border px-3.5 py-3 text-left text-[12px] transition-all ${
+                            personality === id ? "border-[#6d7ef2]/60 bg-[#6d7ef2]/15 text-white" : "border-white/10 bg-black/30 text-white/55 hover:border-white/25"
+                          }`}>
+                          <span className="text-lg">{emoji}</span> {name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Glow */}
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Halo glow</p>
+                    <div className="mt-2.5 flex items-center gap-3">
+                      <input type="range" min={0} max={100} value={glow} onChange={(e) => setGlow(Number(e.target.value))} className="w-full accent-[#6d7ef2]" />
+                      <span className="w-10 text-right font-mono text-[11px] text-white/60">{glow}%</span>
+                    </div>
+                  </div>
+                  {/* Toggles */}
+                  <div className="space-y-2">
+                    {([
+                      ["Pointer buddy", buddyOn, () => setBuddyOn(!buddyOn)],
+                      ["Wake word required", wakeRequired, () => setWakeRequired(!wakeRequired)],
+                      ["Voice listening", voiceEnabled, () => { setVoiceEnabled(!voiceEnabled); if (!voiceEnabled) speak("Voice activated. Say hey NIMO!", "happy"); }],
+                      ["Computer control (click & type on screen)", controlMode === "granted", toggleControlMode]
+                    ] as Array<[string, boolean, () => void]>).map(([label, on, toggle]) => (
+                      <button key={label} onClick={toggle} className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-[12px] text-white/70 transition-all hover:border-white/25">
+                        <span className="text-left">{label}</span>
+                        <span className={`relative ml-3 h-5 w-9 shrink-0 rounded-full transition-colors ${on ? "bg-[#6d7ef2]" : "bg-white/15"}`}>
+                          <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="rounded-2xl border border-white/10 bg-black/30 p-3.5 text-[11px] leading-relaxed text-white/40">
+                    Volume, timers, music and everything else work by voice too — try <span className="text-white/70">“set volume to 40”</span>, <span className="text-white/70">“timer for 5 minutes”</span> or <span className="text-white/70">“play lofi on youtube”</span>.
+                  </div>
+                </>
+              )}
             </div>
           </motion.aside>
         )}
       </AnimatePresence>
 
+      {/* ═══ Timer chips + input bar ═══ */}
+      <div className="absolute inset-x-0 bottom-0 z-30 flex flex-col items-center gap-3 px-6 pb-6">
+        {backendTimers.length > 0 && (
+          <div className="flex flex-wrap justify-center gap-2">
+            {backendTimers.map((t) => (
+              <span key={t.id} className="glass-soft flex items-center gap-2 rounded-full px-3.5 py-1.5 text-[11px] text-white/75">
+                ⏱ {t.label} · <span className="font-mono font-bold text-[#a9b8ff]">{t.remaining}s</span>
+              </span>
+            ))}
+          </div>
+        )}
+        <AnimatePresence>
+          <motion.form
+            onSubmit={handleManualSubmit}
+            initial={{ y: 24, opacity: 0 }} animate={{ y: 0, opacity: 1 }}
+            className="glass flex w-full max-w-2xl items-center gap-2.5 rounded-full px-5 py-3 transition-shadow focus-within:shadow-[0_0_40px_rgba(109,126,242,0.25)]"
+          >
+            <span className="font-mono text-xs font-bold uppercase text-[#a9b8ff]">nimo$</span>
+            <input
+              value={manualInput}
+              onChange={(e) => setManualInput(e.target.value)}
+              placeholder={needsClarification ? "type your answer…" : "ask NIMO to do anything…"}
+              className="w-full bg-transparent text-[14px] text-white outline-none placeholder:text-white/25"
+            />
+            <button type="submit" disabled={busy || !manualInput.trim()} className="rounded-full bg-[#6d7ef2]/25 p-2.5 text-[#a9b8ff] transition-all hover:bg-[#6d7ef2]/40 active:scale-90 disabled:opacity-30">
+              <Send className="h-4 w-4" />
+            </button>
+          </motion.form>
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
