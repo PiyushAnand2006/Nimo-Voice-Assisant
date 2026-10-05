@@ -1,8 +1,13 @@
 module.exports = {
   // AI / Gemini
   AI_MODEL: 'gemini-3.1-flash-lite',
-  AI_MAX_TOKENS: 1000,
+  AI_MAX_TOKENS: 2048,
   AI_HISTORY_LENGTH: 6,
+
+  // Agent loop
+  AGENT_MAX_STEPS: 8,          // max tool rounds per utterance (multi-step tasks)
+  AGENT_HISTORY_TURNS: 10,     // rolling turns kept per session
+  AGENT_SESSION_TTL_MS: 30 * 60 * 1000,
   AI_SYSTEM_PROMPT: `You are NIMO, a friendly and witty desktop voice assistant.
 Rules:
 - Always respond in 1-2 short sentences max (for TTS clarity)
@@ -27,18 +32,22 @@ Rules:
   TTS_PITCH: 1.0,
   TTS_LANG: 'en-US',
 
-  // ElevenLabs TTS
+  // ElevenLabs TTS — a soft, gentle voice (falls back to the OS voice if
+  // the name isn't in the account's library)
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY || '',
-  ELEVENLABS_VOICE_NAME: process.env.ELEVENLABS_VOICE_NAME || 'Eva - Futuristic Robot Helper',
+  ELEVENLABS_VOICE_NAME: process.env.ELEVENLABS_VOICE_NAME || 'Alice',
   ELEVENLABS_FALLBACK_VOICE_ID: process.env.ELEVENLABS_FALLBACK_VOICE_ID || '',
   ELEVENLABS_MODEL_ID: process.env.ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2',
 
-  // Screenshot
-  SCREENSHOT_DIR: 'nimo-screenshots',
+  // Screenshot — inside the user's own Pictures folder on EVERY machine
+  // (Electron resolves it via app.getPath('pictures'); nothing is hardcoded)
+  SCREENSHOT_DIR: 'NIMO Screenshots',
 
-  // Window
-  WINDOW_WIDTH: 320,
-  WINDOW_HEIGHT: 520,
+  // Windows
+  WINDOW_WIDTH: 1280,
+  WINDOW_HEIGHT: 820,
+  COMPANION_WIDTH: 124,   // window hugs the face exactly (grows only for bubble/pill)
+  COMPANION_HEIGHT: 140,
 
   // Logging
   LOG_LEVEL: 'info',
