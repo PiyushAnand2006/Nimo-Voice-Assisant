@@ -1,304 +1,153 @@
-# NIMO — Desktop Voice Assistant (Basic API-based Search Assistant)
+# NIMO — Your Floating Desktop Companion 🌟
 
-NIMO is a cross-platform **desktop voice assistant** with a minimalist "robot face" UI. Speak (or type) a command and NIMO parses the intent, executes it locally — opening apps, playing music, setting timers, adjusting volume, taking screenshots — or falls back to a **Gemini-powered conversational AI** for everything else, then speaks the response back to you.
+<p align="center">
+  <img src="screenshots/dashboard-stage.png" alt="NIMO dashboard — full-screen character stage" width="900" />
+</p>
 
-The repository is a monorepo with two packages:
+NIMO is a **cartoon AI companion that lives on your PC** — a giant glossy blue character with huge googly eyes that rises from the bottom of a **full-screen black stage**, tracks your mouse with its pupils, listens for **"Hey NIMO"** (in English or Hindi), talks through your speakers, sees your screen, moves your mouse, clicks real UI elements, writes files — and asks for your **approval** before anything critical. A real agent layer between you, the OS and the web.
+
+Not a chatbot in a tab. A companion on your desktop.
+
+<p align="center">
+  <img src="screenshots/floating-companion.png" alt="The floating companion hovering over the desktop" width="320" />
+</p>
+
+> 🎨 The character design (blue dome, star, googly eyes, blush, pointer buddy) is NIMO's own SVG recreation, inspired by the aesthetic of [bluey-by-riley](https://github.com/rbrown101010/bluey-by-riley) — all code here is original React/SVG.
 
 | Package        | Role                                                                 |
 |----------------|----------------------------------------------------------------------|
-| `nimo-backend` | Electron main process, intent parser, system/media/search services, AI client, HTTP API server |
-| `nimo-os`      | React + Vite UI ("NIMO OS") with an Express server that proxies commands to the backend |
+| `nimo-backend` | Electron shell (floating overlay + dashboard), Gemini function-calling **agent brain**, OS services, computer control, screen vision, HTTP API |
+| `nimo-os`      | React + Vite UI — the full-screen character stage, the floating overlay, glass panels |
 
 ---
 
-## ✨ Features
+## ✨ What NIMO can do
 
-### Voice & Conversation
-- 🎤 **Voice input** via the Web Speech API, with an optional **"hey nimo" wake word**
-- 💬 **AI chat fallback** — anything that isn't a recognized command goes to Google Gemini with a rolling 6-message conversation window for context
-- 🔊 **Speech output** — browser SpeechSynthesis by default, with optional **ElevenLabs** TTS for a futuristic robot voice
-- 🎭 **Personality modes** (e.g. `friendly`) and animated robot-face states: `idle`, `listening`, `thinking`, `talking`, `happy`, `confused`, `error`, `music`
+### 🧠 Agent brain (Gemini function calling)
+- **Chains tools like a real agent** — "open Notepad and write a comment for me" means: launch the app → type the text, up to 8 tool rounds per request.
+- **Live weather** (Open-Meteo), **factual answers** (Wikipedia), **deep research** (multi-page search + cited briefing), **web search** with inline results.
+- **Clarifying questions** — when a request is ambiguous, NIMO asks one short question back (the UI shows *"needs your answer"*) and continues the task when you reply.
+- **Session memory** — *"and what about Tokyo?"* after a Delhi weather query just works.
+- **English & Hindi only** — replies mirror your language (Hinglish in, Hinglish out); other scripts are filtered out everywhere.
 
-### System Control
-- 🚀 **App launcher** with cross-platform exec + fuzzy matching (Levenshtein distance)
-- 🔉 **Volume control** — up / down / set exact level (`loudness` with OS-level fallbacks)
-- 📸 **Screenshots** via Electron `desktopCapturer`, saved to `nimo-screenshots/`
-- ⏱️ **Timers** — set / cancel / list ("set a timer for 5 minutes"), with a `timer-done` event
-- 🕒 **Time & date** queries, 🌦️ **weather** lookups
-- 🪟 **Close browser tabs/windows** and a `stop` command to interrupt playback
+### 🖥️ OS layer
+- **Opens local files and folders** — "open C:\...\report.pdf" opens the PDF with its default app (document/media/text allowlist; executables refused).
+- **Launches your actual installed apps** — scans the Start Menu, fuzzy-matches what you said, opens the real shortcut (shell-free launch — no command injection possible).
+- **Finds and reads files** by name or content in your own folders (Desktop, Documents, Downloads, Pictures, Music, Videos) — capped and read-only.
 
-### Media & Web
-- 🎵 **Music playback** — Spotify (default) and YouTube
-- ⏭️ Playback control — next / previous / pause / resume
-- 🔎 **Web search** — Google, DuckDuckGo, or Bing, with **inline result snippets** (parsed live from DuckDuckGo) shown in the UI
-- 🖼️ **Image search** — opens Google Images
+### 🖱️ Computer control + screen vision
+- **Sees your screen** — `find_on_screen` captures the display and asks Gemini's vision model to locate a described element ("the first video result"), returning real coordinates.
+- **Moves the mouse, clicks, scrolls, presses key combos** — shell-free PowerShell with integer-only arguments (no command injection).
+- **Computer-control mode** (Settings toggle): **ask first** (default — every click/press shows an approval card) or **granted** (hands-free automation for the session).
 
-### UI / UX
-- 🖥️ Frameless, transparent, always-on-top desktop window + **system tray** icon
-- 📊 **Event log panel** — voice transcripts, detected intents, AI replies, errors
-- ⌨️ **Manual text input** as an alternative to voice
-- ⏸️ Auto-deactivation of voice after 15 s of inactivity
+### ✍️ Gated writes (brain-checked)
+- **Creates and edits text files** in your own folders — notes, markdown, code, config.
+- **Types into the app you have focused** — comments in Notepad/VS Code/a browser field.
+- **The safety core** judges every write twice: hard rules (your folders only, executables blocked, destructive/secret-stealing patterns refused, size caps) **plus** an LLM verdict (benign / suspicious / malicious). Benign new files run immediately; overwrites, flagged content and typing show an **approval card** first. Declining always works; hard blocks can't be overridden.
+- **Never deletes files. Never downloads anything.**
 
----
+### 🌐 Real-time web (safe by construction)
+- Every outbound request flows through a **network guard**: only `http/https`, host validated before connecting, **localhost / private / reserved IP ranges refused**.
+- Keyless APIs (Open-Meteo, Wikipedia, DuckDuckGo) so it works out of the box; Gemini powers the reasoning.
 
-## 🛠️ Tech Stack
+### 🎤 Voice (works inside the app)
+- **Gemini-powered listening** — Electron doesn't ship Chrome's speech backend, so NIMO records your mic (voice-activity detection), encodes WAV in-app and transcribes with your Gemini key. English and Hindi.
+- **Wake word** (`hey nimo`) on by default, or open-mic mode. The mic auto-ducks while NIMO speaks so it never hears itself.
+- **ElevenLabs speech** (soft "Alice" voice) with automatic fallback to the OS voice — free ElevenLabs plans can't use library voices via API; set `ELEVENLABS_FALLBACK_VOICE_ID` in `.env` with a custom voice, or upgrade to unlock "Alice".
 
-### Backend (`nimo-backend`)
-| Technology | Purpose |
-|---|---|
-| **Node.js** (18+, Node 20+ recommended) | Runtime |
-| **Electron 33** | Desktop shell — frameless window, tray, IPC |
-| **@google/genai** | Google Gemini AI client (`gemini-3.1-flash-lite`) for conversational responses |
-| **@anthropic-ai/sdk** | Anthropic SDK (available as an alternative AI provider) |
-| **keytar** | OS keychain storage for API keys |
-| **loudness** | System volume control |
-| **fastest-levenshtein** | Fuzzy app-name matching |
-| **dotenv** | Environment configuration |
-| **electron-builder** | Packaging (NSIS `.exe` / `.dmg` / `.AppImage`) |
-| **concurrently** | Runs UI dev server + Electron together in dev |
-| **node:test** | Built-in test runner (`npm test`) |
+### 🎈 The companion experience
+- **Floating overlay**: a tiny transparent window hugging the creature exactly — drag it anywhere (it stays put, corners included), pin/unpin for click-through, eyes following your cursor, speech bubble, approval cards, voice controls.
+- **Full-screen dashboard stage**: the dome character over a black cinematic stage with a glow halo, plus floating glass panels — Agent Activity (ChatGPT-style markdown answers + work timeline + result cards), Live Logs, OS Tools, Settings (mood, glow, toggles).
+- **Expressions**: curious idle → auto-sleep with Zz, wide-eyed listening, thinking dots, talking mouth, happy squint, sly side-glance, red-halo error, music notes.
+- **Pointer buddy** — a tiny teardrop comet that chases your cursor (toggleable).
+- Logs wipe on every app start; a fresh session every time.
 
-### Frontend (`nimo-os`)
-| Technology | Purpose |
-|---|---|
-| **React 19** + **TypeScript** | UI framework |
-| **Vite 6** | Dev server & bundler |
-| **Tailwind CSS 4** | Styling |
-| **motion (Framer Motion)** | Animations & transitions |
-| **lucide-react** | Icons |
-| **Express 4** | API server that proxies `/api/run-command` and `/api/tts` to the backend |
-| **tsx / esbuild** | TypeScript server execution & production bundling |
-
-### External APIs
-- **Google Gemini** — conversational AI (requires `GEMINI_API_KEY`)
-- **ElevenLabs** (optional) — high-quality TTS (`ELEVENLABS_API_KEY`)
-- **DuckDuckGo / Google / Bing** — web & image search
+### 🛡️ Safety envelope
+- No file deletes, no downloads, no system folders, no executables.
+- Writes and input automation are approval-gated (or granted explicitly by you).
+- Web access is public-host-only; screenshots stay on your machine.
+- `.env` API keys live in the OS keychain, gitignored and never synced.
 
 ---
 
-## ⚙️ How It Works
-
-```text
-┌─────────────────────────── nimo-os (port 3000) ───────────────────────────┐
-│  React UI (robot face, logs, settings, personality)                        │
-│  [mic] → Web Speech API recognizer ── strips "hey nimo" wake word          │
-│  SpeechSynthesis / ElevenLabs TTS ← response                               │
-└──────────────────────────────┬─────────────────────────────────────────────┘
-                               │ POST /api/run-command { transcript }
-                               ▼
-┌──────────────────────── nimo-backend (port 3001) ─────────────────────────┐
-│  commandParser.parseCommand → intentMap (ordered regex intents)            │
-│      ├─ local intents → dispatchIntent()                                   │
-│      │    ├─ systemHandler  (volume, apps, screenshot, timer, time,       │
-│      │    │                 weather)                                       │
-│      │    ├─ mediaHandler   (Spotify / YouTube, playback keys)             │
-│      │    └─ searchHandler  (web search, image search → browser)           │
-│      └─ catch-all ai_query → aiClient.askClaude() → Gemini API             │
-│                  └─ responseBuilder → { action, result, speak, state }     │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-**The command pipeline:**
-
-1. **Capture** — the browser/Electron renderer captures speech with the Web Speech API (or you type it). The `"hey nimo"` wake word is stripped.
-2. **Proxy** — the `nimo-os` Express server forwards the transcript to the backend at `http://localhost:3001/api/run-command` (30 s timeout).
-3. **Parse** — `core/commandParser.js` walks `core/intentMap.js` in order; the first regex match wins (specific intents like `set_timer` come before broad catchers like `open_app`; `ai_query` is always last).
-4. **Dispatch** — the intent is routed to a local service (system, media, search) or, as a catch-all, to Gemini with the conversation history.
-5. **Respond** — a `{ action, result, speak, state }` envelope comes back; the UI animates the robot face, shows results/logs, and speaks the response aloud.
-
-The backend also works **without Electron** — a standalone `server.js` exposes the same HTTP API for the web UI, so you can run it purely as a web app.
-
----
-
-## 📋 Prerequisites
-
-- **Node.js 18+** (Node 20+ recommended)
-- **npm 9+**
-- **Windows 10/11, macOS 12+, or Linux** (X11/Wayland)
-- A **Gemini API key** — get one at [Google AI Studio](https://aistudio.google.com/apikey)
-- *(Optional)* An **ElevenLabs API key** for premium TTS
-
-> ⚠️ Voice recognition uses the browser's Web Speech API, which is fully supported in Chrome/Edge (Electron works too). Other browsers may fall back to text input only.
-
----
-
-## 🚀 Getting Started
-
-### 1. Install dependencies
+## 🚀 Quick start
 
 ```bash
-# Backend
+# 1. Backend deps (Electron + services)
 cd nimo-backend
 npm install
 
-# UI
+# 2. UI deps
 cd ../nimo-os
 npm install
-```
 
-### 2. Configure environment variables
-
-```bash
-# Backend
-cd nimo-backend
-cp .env.example .env
-# edit .env → set GEMINI_API_KEY
-# optionally set ELEVENLABS_API_KEY
-```
-
-`.env.example` (backend) reference:
-
-| Variable | Required | Description |
-|---|---|---|
-| `GEMINI_API_KEY` | ✅ | Google Gemini key — on first launch it's migrated to the OS keychain and blanked from `.env` |
-| `ELEVENLABS_API_KEY` | ➖ | ElevenLabs TTS key (falls back to browser SpeechSynthesis) |
-| `ELEVENLABS_VOICE_NAME` | ➖ | Voice name, default `Eva - Futuristic Robot Helper` |
-| `ELEVENLABS_MODEL_ID` | ➖ | Default `eleven_multilingual_v2` |
-| `NODE_ENV` | ➖ | `development` or `production` |
-| `HTTP_SERVER_PORT` | ➖ | Backend port, default `3001` |
-
-```bash
-# UI
-cd ../nimo-os
-cp .env.example .env
-```
-
-`.env.example` (UI) reference:
-
-| Variable | Required | Description |
-|---|---|---|
-| `NIMO_BACKEND_URL` | ➖ | Backend URL, default `http://localhost:3001` |
-| `APP_URL` | ➖ | Where nimo-os is hosted, default `http://localhost:3000` |
-
----
-
-## ▶️ Running the Project
-
-### Option A — Full desktop app (development)
-
-```bash
-cd nimo-backend
+# 3. Run the app (UI dev server + Electron with floating companion)
+cd ../nimo-backend
 npm run dev
 ```
 
-This launches both at once via `concurrently`:
-- the **UI dev server** (`nimo-os`) on `http://localhost:3000`
-- the **Electron app**, which loads the dev server in a frameless window
+- The **companion** appears floating over your screen — drag it anywhere.
+- The **dashboard** opens as a normal window (fullscreen toggle in the header, `Ctrl+Alt+N` to bring it back, tray icon always available).
+- Say **"Hey NIMO, what's the weather?"** or type in the `nimo$` terminal.
 
-### Option B — Web app without Electron
+### Headless / browser-only dev
+```bash
+cd nimo-backend && node server.js   # agent API on :3001
+cd nimo-os && npm run dev           # UI on :3000 (proxies /api → :3001)
+```
+
+### Gemini API key
+Put `GEMINI_API_KEY=...` in `nimo-backend/.env` (or set it in the UI settings) — it is migrated into the OS keychain on first launch. Add `ELEVENLABS_API_KEY=...` for the ElevenLabs voice.
+
+---
+
+## 🧭 Architecture
+
+```
+┌────────────────────────┐      ┌─────────────────────────────┐
+│  Companion overlay     │      │  NIMO OS dashboard          │
+│  tiny, transparent,    │      │  full-screen character      │
+│  always-on-top         │      │  stage + glass panels       │
+│  drag · pin · voice    │      │  markdown answers · logs    │
+└──────────┬─────────────┘      └──────────────┬──────────────┘
+           │  Electron IPC (window.nimo)       │  /api/* (proxy)
+           ▼                                   ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Electron main · tray · global mouse poll · HTTP API :3001  │
+│─────────────────────────────────────────────────────────────│
+│  core/agent.js       Gemini tool loop + sessions + approvals│
+│  core/agentTools.js  the ONLY action surface (24 safe tools)│
+│  services/web        liveData (weather/knowledge) · research│
+│  services/system     appFinder · fileSearch · textWriter ·  │
+│                      keyTyper · computerControl · screenVision
+│  services/guard      safeFetch (public-host-only gateway) · │
+│                      writeGuard (rules + AI verdict)        │
+│  core/pendingActions approval gate for critical actions     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Voice flow:** microphone → VAD recording → Gemini transcription → wake-word check → `/api/agent` → Gemini decides → tool calls execute (approval cards for critical ones) → ElevenLabs/OS voice + face expression + rich cards.
+
+## 📁 Key files
+
+| File | Purpose |
+|------|---------|
+| `nimo-backend/core/agent.js` | Agent loop: tools, sessions, `[CLARIFY]`, approvals |
+| `nimo-backend/core/agentTools.js` | The complete, safe action surface |
+| `nimo-backend/core/httpApi.js` | Shared HTTP routes (Electron + headless) |
+| `nimo-backend/services/guard/safeFetch.js` | Outbound network guard |
+| `nimo-backend/services/guard/writeGuard.js` | Write safety core (rules + AI verdict) |
+| `nimo-backend/services/system/computerControl.js` | Mouse / keyboard automation |
+| `nimo-backend/services/system/screenVision.js` | Screenshot → Gemini vision → coordinates |
+| `nimo-backend/electron/main.js` | Overlay + dashboard windows, mouse feed, tray |
+| `nimo-os/src/components/NimoFace.tsx` | The full-stage character (static SVG tree) |
+| `nimo-os/src/components/FloatingBlob.tsx` | The tiny floating companion |
+| `nimo-os/src/overlay/OverlayApp.tsx` | The floating companion widget |
+| `nimo-os/src/hooks/useNimoAgent.ts` | Shared brain: agent calls, voice engines |
+
+## 🧪 Tests
 
 ```bash
-# Terminal 1 — backend HTTP server
-cd nimo-backend
-node server.js        # listens on http://localhost:3001
-
-# Terminal 2 — UI
-cd nimo-os
-npm run dev           # serves UI + API proxy on http://localhost:3000
+cd nimo-backend && npm test          # node --test (43 tests)
+cd nimo-os && npm run lint           # tsc --noEmit
 ```
-
-Then open **http://localhost:3000** in your browser.
-
-### Option C — Electron production shell only
-
-```bash
-cd nimo-backend
-npm start             # electron . — loads ../nimo-os/dist (build the UI first)
-```
-
----
-
-## 🏗️ Building for Distribution
-
-```bash
-cd nimo-backend
-npm run build
-```
-
-This builds the UI (`vite build`) and packages the Electron app with **electron-builder**, producing:
-- **Windows** — NSIS installer `.exe`
-- **macOS** — `.dmg`
-- **Linux** — `.AppImage`
-
-Icons are expected at `nimo-backend/assets/icon.ico` / `.icns` / `.png`.
-
----
-
-## 🧪 Tests & Checks
-
-```bash
-cd nimo-backend
-npm test              # node --test (intent map, dispatch, handlers)
-npm run typecheck     # syntax-validates all backend JS files
-
-cd ../nimo-os
-npm run lint          # tsc --noEmit
-```
-
----
-
-## 🔌 API Reference
-
-### NIMO backend (`http://localhost:3001`)
-
-| Method | Endpoint | Body | Returns |
-|---|---|---|---|
-| `GET` | `/api/health` | – | `{ ok, service, ts }` |
-| `POST` | `/api/run-command` | `{ transcript, personality?, intent? }` | `{ ok, action, result, speak, state, openUrl?, timer?, stop? }` |
-| `POST` | `/api/tts` | `{ text, opts? }` | ElevenLabs audio data |
-
-### nimo-os server (`http://localhost:3000`)
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/logs` | Event log buffer + timers |
-| `POST` | `/api/logs/add` | Append a log entry |
-| `POST` | `/api/logs/clear` | Clear the log |
-| `POST` | `/api/run-command` | Proxy to backend |
-| `POST` | `/api/tts` | Proxy to backend TTS |
-
-### Electron IPC (UI ↔ main, via `window.nimo.invoke`)
-
-Channels include `nimo:run-command`, `nimo:ai-query`, `nimo:set-volume`, `nimo:open-app`, `nimo:play-music`, `nimo:web-search`, `nimo:take-screenshot`, `nimo:set-timer`, `nimo:cancel-timer`, `nimo:list-timers`, `nimo:get-time`, `nimo:get-weather`, `nimo:save-api-key`, `nimo:has-api-key`. Main-process events: `nimo:timer-done`, `nimo:state-change`, `nimo:speak`, `nimo:config`. See `nimo-backend/README.md` for the full table.
-
----
-
-## 🗂️ Project Structure
-
-```text
-nimo_voice_assistant_app/
-├── nimo-backend/            # Electron + Node backend
-│   ├── electron/            # main.js (window/tray/HTTP server), preload.js, ipc/ handlers
-│   ├── core/                # commandParser, intentMap, aiClient (Gemini), responseBuilder
-│   ├── services/
-│   │   ├── system/          # appLauncher, volumeControl, screenshotter, timerManager, ...
-│   │   ├── media/           # spotifyHandler, youtubeHandler
-│   │   ├── web/             # searchService (Google/DDG/Bing + image search)
-│   │   ├── speech/          # recognizer, synthesizer (renderer-side)
-│   │   └── tts/             # elevenLabsTts
-│   ├── config/              # constants.js (all tunables), keystore.js (keytar)
-│   ├── utils/               # logger, errorHandler, osDetect
-│   ├── server.js            # standalone HTTP server (no Electron)
-│   ├── test/                # node:test suites
-│   └── assets/              # icons
-├── nimo-os/                 # React + Vite UI
-│   ├── src/App.tsx          # robot-face UI, voice, logs, settings, personality
-│   ├── server.ts            # Express server + /api proxies
-│   └── vite.config.ts
-└── docs/                    # Architecture, PRD, design & phase docs
-```
-
----
-
-## 🔒 Security Notes
-
-- **Never commit `.env` files or API keys.** Only `.env.example` files belong in git.
-- The backend **migrates API keys into the OS keychain** via `keytar` on first launch and blanks them from the environment.
-- The Electron renderer runs with `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`, and only whitelisted IPC channels are exposed through the `contextBridge`.
-- Rotate API keys immediately if they were ever exposed.
-
----
-
-## 📝 License
-
-MIT
