@@ -37,9 +37,10 @@ export default function App() {
   const API = isElectron ? "http://localhost:3001" : "";
 
   const {
-    faceState, caption, steps, cards, needsClarification, busy,
+    faceState, caption, setCaption, steps, cards, needsClarification, busy,
     pendingApproval, approve, lastAgentText, voiceEngine,
     ask, speak, voiceEnabled, setVoiceEnabled, wakeRequired, setWakeRequired,
+    silentMode, setSilentMode,
     transcript, setPersonality: pushPersonality, mouse
   } = useNimoAgent({ autoVoice: false, sessionId: "dashboard", listenPushes: false });
 
@@ -174,6 +175,18 @@ export default function App() {
     speak(next === "granted"
       ? "Computer control granted. I can now click and type on your screen when you ask."
       : "Computer control set back to asking first.", "happy");
+  };
+
+  const toggleSilentMode = () => {
+    const next = !silentMode;
+    setSilentMode(next);
+    if (next) {
+      // Fully silent = type-only: force the mic off.
+      setVoiceEnabled(false);
+      setCaption("Silent mode — I will answer in the cloud popup.");
+    } else {
+      speak("Talking mode back on.", "happy");
+    }
   };
 
   const runFileSearch = async (e: React.FormEvent) => {
@@ -630,7 +643,8 @@ export default function App() {
                     {([
                       ["Pointer buddy", buddyOn, () => setBuddyOn(!buddyOn)],
                       ["Wake word required", wakeRequired, () => setWakeRequired(!wakeRequired)],
-                      ["Voice listening", voiceEnabled, () => { setVoiceEnabled(!voiceEnabled); if (!voiceEnabled) speak("Voice activated. Say hey NIMO!", "happy"); }],
+                      ["Voice listening", voiceEnabled && !silentMode, () => { if (silentMode) { setSilentMode(false); setVoiceEnabled(true); speak("Voice activated. Say hey NIMO!", "happy"); } else { setVoiceEnabled(!voiceEnabled); if (!voiceEnabled) speak("Voice activated. Say hey NIMO!", "happy"); } }],
+                      ["Silent mode (cloud replies only)", silentMode, toggleSilentMode],
                       ["Computer control (click & type on screen)", controlMode === "granted", toggleControlMode]
                     ] as Array<[string, boolean, () => void]>).map(([label, on, toggle]) => (
                       <button key={label} onClick={toggle} className="flex w-full items-center justify-between rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-[12px] text-white/70 transition-all hover:border-white/25">

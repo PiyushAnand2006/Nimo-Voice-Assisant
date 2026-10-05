@@ -143,6 +143,31 @@ html, body, #root {
   50% { transform: translateY(-7px); opacity: 1; }
 }
 
+/* Bouncing thinking dots (kept for bubble use) */
+@keyframes thinkBounce {
+  0%, 100% { transform: translateY(0); opacity: 0.5; }
+  50% { transform: translateY(-7px); opacity: 1; }
+}
+
+/* ═══ Cloud popup (floating companion, silent mode) ═════════════════════ */
+
+/* Cloud body + scalloped bumps share one solid fill so the silhouette
+   merges into a single cloud shape. */
+.cloud-body { background: #0a0e24; border: 1px solid rgba(109, 126, 242, 0.35); }
+.cloud-bump {
+  background: #0a0e24;
+  border: 1px solid rgba(109, 126, 242, 0.35);
+  border-bottom: none;
+  border-radius: 9999px 9999px 0 0;
+  z-index: -1;
+}
+.cloud-dot {
+  background: #0a0e24;
+  border: 1px solid rgba(109, 126, 242, 0.3);
+  border-radius: 9999px;
+}
+.cloud-body, .cloud-bump { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+
 /* OPACITY-ONLY animations for use INSIDE the big stage SVG — Chromium throws
    DOMException when React commits DOM changes around transform-animated SVG
    subtrees, so the stage must never use transform keyframes. */

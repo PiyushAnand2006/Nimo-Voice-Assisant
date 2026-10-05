@@ -78,7 +78,26 @@ export function useNimoAgent(opts: { autoVoice?: boolean; sessionId?: string; li
   const [voiceEngine, setVoiceEngine] = useState<'elevenlabs' | 'browser'>('browser')
   const [voiceEnabled, setVoiceEnabled] = useState(false) // always start muted
   const [wakeRequired, setWakeRequired] = useState(() => localStorage.getItem('nimo-wake-required') !== '0')
+  // Silent mode: no speaker, no mic — the companion becomes type-only and
+  // answers in the cloud popup. Persisted and synced across windows.
+  const [silentMode, setSilentModeState] = useState(() => localStorage.getItem('nimo-silent') === '1')
+  const silentRef = useRef(silentMode)
+  silentRef.current = silentMode
   const [mouse, setMouse] = useState({ nx: 0, ny: 0 })
+
+  const setSilentMode = useCallback((v: boolean) => {
+    setSilentModeState(v)
+    localStorage.setItem('nimo-silent', v ? '1' : '0')
+  }, [])
+
+  // Keep every window in sync when the toggle flips elsewhere.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'nimo-silent') setSilentModeState(e.newValue === '1')
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   const voiceEnabledRef = useRef(voiceEnabled)
   voiceEnabledRef.current = voiceEnabled
@@ -102,6 +121,15 @@ export function useNimoAgent(opts: { autoVoice?: boolean; sessionId?: string; li
     // TTS engines spell all-caps "NIMO" letter-by-letter — "Nimo" speaks
     // as one word.
     const spoken = text.replace(/\bNIMO\b/g, 'Nimo').slice(0, 500)
+
+    // Silent mode: the cloud popup IS the answer — nothing is ever voiced,
+    // and the mic stays off. Show the expression briefly, then rest.
+    if (silentRef.current) {
+      setFaceState(state === 'idle' ? 'talking' : state)
+      setTimeout(() => setFaceState('idle'), 2200 + Math.min(6000, spoken.length * 45))
+      return
+    }
+
     setFaceState(state === 'idle' ? 'talking' : state)
     // Pause the mic while NIMO talks so it never hears itself.
     try { recRef.current?.quietStop?.() } catch { /* noop */ }
@@ -398,8 +426,16 @@ export function useNimoAgent(opts: { autoVoice?: boolean; sessionId?: string; li
 
   // Start/stop the engines when the voice toggle flips (never auto-on).
   // This runs in BOTH windows — autoVoice no longer gates it, because voice
-  // always boots muted and the user toggles it manually.
+  // always boots muted and the user toggles it manually. Silent mode forces
+  // everything off: fully silent = type-only.
   useEffect(() => {
+    if (silentMode) {
+      if (voiceEnabled) setVoiceEnabled(false)
+      stopGeminiVoice()
+      stopBrowserVoice()
+      setTranscript('')
+      return
+    }
     if (voiceEnabled) {
       if (bridge) startGeminiVoice()
       else startBrowserVoice()
@@ -409,7 +445,7 @@ export function useNimoAgent(opts: { autoVoice?: boolean; sessionId?: string; li
       setTranscript('')
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voiceEnabled, bridge])
+  }, [voiceEnabled, silentMode, bridge])
 
   // Cleanup on unmount.
   useEffect(() => () => {
@@ -504,6 +540,7 @@ export function useNimoAgent(opts: { autoVoice?: boolean; sessionId?: string; li
       setWakeRequired(v)
       localStorage.setItem('nimo-wake-required', v ? '1' : '0')
     },
+    silentMode, setSilentMode,
     mouse,
     setPersonality
   }

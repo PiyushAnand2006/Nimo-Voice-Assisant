@@ -12,16 +12,17 @@
 
 import React, { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { Mic, MicOff, LayoutDashboard, Send, Lock, Unlock, X, CheckCircle2, XCircle, Radio } from 'lucide-react'
+import { Mic, MicOff, LayoutDashboard, Send, Lock, Unlock, X, CheckCircle2, XCircle, Radio, VolumeX } from 'lucide-react'
 import FloatingBlob from '../components/FloatingBlob'
 import { useNimoAgent } from '../hooks/useNimoAgent'
 import type { FaceState } from '../types'
 
 export default function OverlayApp() {
   const {
-    bridge, faceState, caption, needsClarification, busy, transcript,
+    bridge, faceState, caption, setCaption, needsClarification, busy, transcript,
     pendingApproval, approve,
-    ask, speak, voiceEnabled, setVoiceEnabled, wakeRequired, setWakeRequired, mouse
+    ask, speak, voiceEnabled, setVoiceEnabled, wakeRequired, setWakeRequired,
+    silentMode, setSilentMode, mouse
   } = useNimoAgent({ autoVoice: true, sessionId: 'companion' })
 
   const [draft, setDraft] = useState('')
@@ -120,8 +121,8 @@ export default function OverlayApp() {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      {/* ═══ Speech bubble (window grows to fit it) ═══ */}
-      <div className="pointer-events-none absolute inset-x-0 top-4 z-20 flex justify-center px-4">
+      {/* ═══ Cloud popup (thought-bubble style — no tail, floating dots) ═══ */}
+      <div className="pointer-events-none absolute inset-x-0 top-5 z-20 flex justify-center px-4">
         <AnimatePresence mode="wait">
           {(caption || busy) && (
             <motion.div
@@ -130,32 +131,38 @@ export default function OverlayApp() {
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, y: -8, scale: 0.96 }}
               transition={{ duration: 0.18 }}
-              className={`w-full max-w-[300px] rounded-[20px] border px-4 py-3 text-[12px] leading-relaxed shadow-[0_14px_36px_rgba(2,6,20,0.6)] ${
-                needsClarification
-                  ? 'border-amber-400/50 bg-[#221503]/95 text-amber-200'
-                  : 'border-[#6d7ef2]/40 bg-[#0a0e24]/95 text-white/90'
-              }`}
+              className="relative w-full max-w-[300px]"
             >
-              {needsClarification && (
-                <span className="mb-1 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-amber-400">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
-                  Needs your answer
-                </span>
-              )}
-              {busy ? (
-                <span className="flex justify-center gap-1 py-1">
-                  {[0, 1, 2].map((i) => (
-                    <span key={i} className="h-1.5 w-1.5 rounded-full bg-[#a9b8ff]" style={{ animation: `thinkBounce 0.9s ${i * 0.15}s infinite` }} />
-                  ))}
-                </span>
-              ) : (
-                <span className="line-clamp-4">{caption}</span>
-              )}
-              <span
-                className={`absolute -bottom-[7px] left-1/2 h-3.5 w-3.5 -translate-x-1/2 rotate-45 border-b border-r ${
-                  needsClarification ? 'border-amber-400/50 bg-[#221503]' : 'border-[#6d7ef2]/40 bg-[#0a0e24]'
+              {/* Cloud body — solid fill so the scalloped bumps merge seamlessly */}
+              <div
+                className={`cloud-body relative rounded-[26px] px-4 py-3 text-[12px] leading-relaxed shadow-[0_14px_36px_rgba(2,6,20,0.6)] ${
+                  needsClarification ? 'text-amber-200' : 'text-white/90'
                 }`}
-              />
+              >
+                {/* Scalloped bumps on top — the cloud silhouette */}
+                <span className="cloud-bump absolute -top-2.5 left-[16%] h-6 w-11" />
+                <span className="cloud-bump absolute -top-4 left-[42%] h-8 w-14" />
+                <span className="cloud-bump absolute -top-2.5 right-[14%] h-6 w-10" />
+
+                {needsClarification && (
+                  <span className="mb-1 flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.15em] text-amber-400">
+                    <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+                    Needs your answer
+                  </span>
+                )}
+                {busy ? (
+                  <span className="flex justify-center gap-1 py-1">
+                    {[0, 1, 2].map((i) => (
+                      <span key={i} className="h-1.5 w-1.5 rounded-full bg-[#a9b8ff]" style={{ animation: `thinkBounce 0.9s ${i * 0.15}s infinite` }} />
+                    ))}
+                  </span>
+                ) : (
+                  <span className="line-clamp-4">{caption}</span>
+                )}
+              </div>
+              {/* Floating dots leading down to the creature (thought bubble) */}
+              <span className={`cloud-dot absolute left-[38%] top-[calc(100%+2px)] h-2 w-2 ${busy ? 'opacity-0' : 'opacity-100'}`} />
+              <span className={`cloud-dot absolute left-[31%] top-[calc(100%+10px)] h-1.5 w-1.5 ${busy ? 'opacity-0' : 'opacity-90'}`} />
             </motion.div>
           )}
         </AnimatePresence>
@@ -201,16 +208,31 @@ export default function OverlayApp() {
         )}
       </AnimatePresence>
 
-      {/* ═══ The creature — DRAG it anywhere; mic is on the pill ═══ */}
+      {/* ═══ The creature — DRAG it anywhere. Click: silent → type input,
+              talking mode → toggles the mic ═══ */}
       <div
         className="absolute inset-x-0 z-10 flex justify-center transition-all duration-200"
-        style={{ bottom: inputOpen ? 100 : hoverStable ? 44 : 8 }}
+        style={{ bottom: inputOpen ? 104 : hoverStable ? 44 : 8 }}
       >
         <div
-          title="Drag me anywhere"
+          title="Drag me anywhere — click to talk or type"
           style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
         >
-          <FloatingBlob state={faceState} mouse={mouse} size={blobSize} />
+          <button
+            onClick={() => {
+              if (silentMode) {
+                setInputOpen(true)
+                setCaption('Silent mode — type your task below.')
+              } else {
+                setVoiceEnabled(!voiceEnabled)
+                if (!voiceEnabled) speak('Voice on. Say hey NIMO!', 'happy')
+              }
+            }}
+            className={`block outline-none transition-transform active:scale-95 ${faceState === 'talking' || busy ? 'blob-talk-bounce' : ''}`}
+            title={silentMode ? 'Silent mode — click to type a task' : voiceEnabled ? 'Voice on — click to mute' : 'Muted — click to listen'}
+          >
+            <FloatingBlob state={faceState} mouse={mouse} size={blobSize} />
+          </button>
         </div>
       </div>
 
@@ -228,11 +250,15 @@ export default function OverlayApp() {
       >
         <div className="flex items-center gap-0.5 rounded-full border border-white/15 bg-[#0a0e24]/92 px-1 py-0.5 shadow-[0_10px_30px_rgba(2,6,20,0.6)]">
           <button
-            onClick={() => { setVoiceEnabled(!voiceEnabled); if (!voiceEnabled) speak('Voice on. Say hey NIMO!', 'happy') }}
+            onClick={() => {
+              if (silentMode) { setInputOpen(true); setCaption('Silent mode — type your task below.'); return }
+              setVoiceEnabled(!voiceEnabled)
+              if (!voiceEnabled) speak('Voice on. Say hey NIMO!', 'happy')
+            }}
             className={`${pillBtn} ${voiceEnabled ? 'text-[#5eead4]' : 'text-white/55 hover:text-white'}`}
-            title={voiceEnabled ? 'Voice on — click to mute' : 'Muted — click to listen'}
+            title={silentMode ? 'Silent mode — type instead' : voiceEnabled ? 'Voice on — click to mute' : 'Muted — click to listen'}
           >
-            {voiceEnabled ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
+            {silentMode ? <VolumeX className="h-3 w-3 text-amber-300/80" /> : voiceEnabled ? <Mic className="h-3 w-3" /> : <MicOff className="h-3 w-3" />}
           </button>
           <button
             onClick={() => setInputOpen((o) => !o)}
