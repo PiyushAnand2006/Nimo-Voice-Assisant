@@ -12,6 +12,7 @@ const { format, NimoError } = require('../../utils/errorHandler')
 // Core
 const { parseCommand } = require('../../core/commandParser')
 const { askClaude } = require('../../core/aiClient')
+const { runAgent } = require('../../core/agent')
 const response = require('../../core/responseBuilder')
 const { phrases } = require('../../core/responseBuilder')
 const constants = require('../../config/constants')
@@ -43,6 +44,9 @@ function pushSpeak(mainWindow, text) {
     mainWindow.webContents.send('nimo:speak', { text })
   }
 }
+
+// Personality chosen in the dashboard; used by the agent fallback path.
+let currentPersonality = 'friendly'
 
 /**
  * Central intent → service dispatcher.
@@ -158,13 +162,11 @@ async function dispatchIntent(intent, params, mainWindow) {
         return response.screenshot(res)
       }
 
-      // ---------- Weather ----------
+      // ---------- Weather (legacy fast-path: real API via the agent tools) ----------
       case 'get_weather': {
-        const { shell } = require('electron')
-        const loc = params.city ? encodeURIComponent(params.city) : encodeURIComponent('my location')
-        try { await shell.openExternal(`https://wttr.in/${loc}?format=3`) } catch (_) { /* noop */ }
-        const summary = params.city ? `Showing the weather for ${params.city}.` : 'Opening the weather for your location.'
-        return response.weather({ summary })
+        const liveData = require('../../services/web/liveData')
+        const r = await liveData.getWeather(params.city || null)
+        return response.weather({ summary: r.speak, data: r.data })
       }
 
       // ---------- Stop ----------
@@ -174,12 +176,27 @@ async function dispatchIntent(intent, params, mainWindow) {
         return response.stop()
       }
 
-      // ---------- AI fallback ----------
+      // ---------- Agent fallback ----------
+      // The catch-all now runs the full tool-using agent: real-time fetches,
+      // OS actions, and clarifying questions when the request is ambiguous.
       case 'ai_query': {
         pushStateChange(mainWindow, 'thinking')
-        const text = await askClaude(params.text || '')
-        if (mainWindow) pushSpeak(mainWindow, text)
-        return response.AI({ text })
+        const result = await runAgent({
+          text: params.text || '',
+          sessionId: 'ipc-default',
+          personality: currentPersonality
+        })
+        if (mainWindow && result.speak) pushSpeak(mainWindow, result.speak)
+        return {
+          action: result.needsClarification ? 'agent_clarify' : 'agent',
+          result: { text: result.text, steps: result.steps, cards: result.cards },
+          speak: result.speak,
+          state: result.state,
+          openUrl: result.openUrl,
+          needsClarification: result.needsClarification,
+          steps: result.steps,
+          cards: result.cards
+        }
       }
 
       default:
@@ -239,6 +256,51 @@ function registerAllIpc(mainWindow) {
       return { ok: true, data: { text: reply } }
     } catch (err) {
       return format(err, 'AI')
+    }
+  })
+
+  // --- Full agent brain (tools + clarification + sessions) ---
+  ipcMain.handle('nimo:agent', async (_e, { text, sessionId, personality } = {}) => {
+    try {
+      if (!text || !String(text).trim()) return format(new Error('No text supplied.'), 'AGENT')
+      pushStateChange(mainWindow, 'thinking')
+      const result = await runAgent({
+        text: String(text),
+        sessionId: sessionId || 'ipc-default',
+        personality: personality || currentPersonality
+      })
+      if (result.speak) pushSpeak(mainWindow, result.speak)
+      return { ok: true, data: result }
+    } catch (err) {
+      return format(err, 'AGENT')
+    }
+  })
+
+  ipcMain.handle('nimo:set-personality', async (_e, { personality } = {}) => {
+    if (personality) currentPersonality = personality
+    return { ok: true, data: { personality: currentPersonality } }
+  })
+
+  // --- OS layer: installed apps + read-only file search ---
+  ipcMain.handle('nimo:list-apps', async (_e, { filter } = {}) => {
+    try {
+      const appFinder = require('../../services/system/appFinder')
+      const apps = appFinder.listInstalledApps()
+      const f = String(filter || '').toLowerCase()
+      const filtered = f ? apps.filter((a) => a.name.toLowerCase().includes(f)) : apps
+      return { ok: true, data: { count: apps.length, apps: filtered.slice(0, 100).map((a) => ({ name: a.name, folder: a.folder })) } }
+    } catch (err) {
+      return format(err, 'APPS')
+    }
+  })
+
+  ipcMain.handle('nimo:search-files', async (_e, { name, folder } = {}) => {
+    try {
+      const fileSearch = require('../../services/system/fileSearch')
+      const r = await fileSearch.searchFiles({ name, folder })
+      return { ok: r.ok, data: r.data, speak: r.speak }
+    } catch (err) {
+      return format(err, 'FILE_SEARCH')
     }
   })
 

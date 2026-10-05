@@ -1,13 +1,21 @@
 /**
  * electron/main.js
- * Electron entry point. Builds a frameless, transparent, always-on-top
- * BrowserWindow, sets up the system tray, loads keystore config, and wires
- * every IPC handler.
+ * Electron entry point for NIMO the desktop companion.
+ *
+ * Two windows:
+ *   1. companionWindow — a frameless, transparent, ALWAYS-ON-TOP floating
+ *      cartoon face that hovers over everything, tracks the mouse with its
+ *      eyes, listens for voice and speaks through the speakers.
+ *   2. dashboardWindow — the full "NIMO OS" control panel (agent activity,
+ *      logs, personality, sensors, OS tools).
+ *
+ * Plus a system tray, a global mouse-poll loop that feeds the companion's
+ * eye tracking, and the shared localhost HTTP API (core/httpApi.js).
  */
 
 require('dotenv').config()
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, screen, globalShortcut } = require('electron')
 const http = require('http')
 const path = require('path')
 const fs = require('fs')
@@ -16,157 +24,323 @@ const constants = require('../config/constants')
 const { initKey } = require('../config/keystore')
 const logger = require('../utils/logger')
 const { registerAllIpc, dispatchIntent } = require('./ipc')
-const { parseCommand } = require('../core/commandParser')
-const { currentTimeDate } = require('./ipc/systemHandler')
+const { handleApiRequest, setContext } = require('../core/httpApi')
 const timerManager = require('../services/system/timerManager')
 
-// Refs we need to keep alive.
-let mainWindow = null
+let companionWindow = null
+let dashboardWindow = null
 let tray = null
+let mouseTimer = null
+let lastMouse = { x: -1, y: -1 }
+// The creature's screen anchor (center-x, bottom-y). Resizes grow the window
+// AROUND this point so the creature never shifts when the bubble/pill appears.
+let companionAnchor = null
+let suppressAnchorUntil = 0
 
-// Decide UI source: dev server URL in dev, built ui/index.html in prod.
-function resolveUiPath() {
+function captureCompanionAnchor() {
+  if (!companionWindow || companionWindow.isDestroyed()) return
+  const [x, y] = companionWindow.getPosition()
+  const [w, h] = companionWindow.getSize()
+  companionAnchor = { cx: x + w / 2, bottom: y + h }
+}
+
+// Decide UI source: dev server URL in dev, built nimo-os dist in prod.
+function resolveUiBase() {
   if (process.env.NODE_ENV === 'development') {
     return constants.DEV_SERVER_URL
   }
-  return constants.UI_BUILD_PATH
+  return null // dist/index.html on disk
 }
 
-// --- HTTP server for nimo-os proxy (port 3001) -----------------------
-
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type'
+function uiUrl(query) {
+  const base = resolveUiBase()
+  if (base) return `${base}?${query}`
+  const distPath = path.isAbsolute(constants.UI_BUILD_PATH)
+    ? constants.UI_BUILD_PATH
+    : path.join(process.cwd(), constants.UI_BUILD_PATH)
+  const fileUrl = 'file://' + distPath.replace(/\\/g, '/') + '/index.html'
+  return `${fileUrl}?${query}`
 }
 
-function parseBody(req) {
-  return new Promise((resolve, reject) => {
-    let data = ''
-    req.on('data', (chunk) => { data += chunk })
-    req.on('end', () => {
-      try { resolve(data ? JSON.parse(data) : {}) } catch { reject(new Error('Invalid JSON')) }
-    })
-    req.on('error', reject)
+function loadWindow(win, query) {
+  const target = uiUrl(query)
+  if (/^https?:\/\//i.test(target)) {
+    win.loadURL(target)
+  } else {
+    win.loadURL(target)
+  }
+}
+
+// ── Companion overlay window ─────────────────────────────────────────────
+
+function createCompanionWindow() {
+  const { width: screenW, height: screenH } = screen.getPrimaryDisplay().workAreaSize
+  const W = constants.COMPANION_WIDTH
+  const H = constants.COMPANION_HEIGHT
+
+  companionWindow = new BrowserWindow({
+    width: W,
+    height: H,
+    x: screenW - W - 28,
+    y: screenH - H - 40,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    skipTaskbar: true,
+    hasShadow: false,
+    alwaysOnTop: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false, // Web Speech + audio playback in a transparent window
+      backgroundThrottling: false
+    }
+  })
+
+  companionWindow.setAlwaysOnTop(true, 'screen-saver')
+  companionWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  loadWindow(companionWindow, 'view=overlay')
+  companionWindow.once('ready-to-show', () => { companionWindow.show(); captureCompanionAnchor() })
+  // Track the creature's position so resizes anchor exactly where the user
+  // dragged it (dragging fires 'moved'; our own resizes are suppressed for
+  // a short window since those events can arrive asynchronously).
+  companionWindow.on('moved', () => { if (Date.now() > suppressAnchorUntil) captureCompanionAnchor() })
+  companionWindow.on('resized', () => { if (Date.now() > suppressAnchorUntil) captureCompanionAnchor() })
+  companionWindow.on('closed', () => { companionWindow = null })
+
+  // Timers finishing must ring in the companion (it's the talking face).
+  timerManager.setExternalDispatcher((payload) => {
+    try {
+      if (companionWindow && !companionWindow.isDestroyed()) {
+        companionWindow.webContents.send('nimo:timer-done', payload)
+      }
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+        dashboardWindow.webContents.send('nimo:timer-done', payload)
+      }
+    } catch (err) {
+      logger.error(`timer dispatch failed: ${err.message}`)
+    }
   })
 }
 
-function sendJson(res, statusCode, data) {
-  res.writeHead(statusCode, { 'Content-Type': 'application/json', ...CORS_HEADERS })
-  res.end(JSON.stringify(data))
+// Movement is drag-only — the user positions the companion; nothing moves it
+// automatically. (An earlier auto-wander hop made it jump around the screen;
+// removed by design.)
+
+// ── Dashboard window ─────────────────────────────────────────────────────
+
+function createDashboardWindow() {
+  if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+    dashboardWindow.show()
+    dashboardWindow.focus()
+    return
+  }
+
+  dashboardWindow = new BrowserWindow({
+    width: 1280,
+    height: 820,
+    minWidth: 960,
+    minHeight: 640,
+    frame: false,
+    fullscreen: false, // opens as a normal window — fullscreen is a toggle
+    autoHideMenuBar: true,
+    backgroundColor: '#000000',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false
+    }
+  })
+
+  loadWindow(dashboardWindow, 'view=dashboard')
+  // Surface renderer-side failures (blank screen diagnosis)
+  dashboardWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) logger.warn(`[dashboard:console] ${message} (${sourceId}:${line})`)
+  })
+  dashboardWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    logger.error(`[dashboard] did-fail-load ${code} ${desc} ${url}`)
+  })
+  dashboardWindow.webContents.on('render-process-gone', (_e, details) => {
+    logger.error(`[dashboard] render-process-gone: ${details.reason}`)
+  })
+  // Deep diagnosis: capture React's component stack when the SVG commit
+  // error strikes, relayed into the backend log buffer.
+  const REACT_DIAG = `(() => {
+    try {
+      const orig = console.error;
+      console.error = function (...args) {
+        try {
+          const text = args.map((a) => {
+            if (a && a.stack) return a.stack;
+            if (a && a.message) return a.name + ': ' + a.message;
+            return String(a);
+          }).join(' | ');
+          if (text.includes('error occurred') || text.includes('removeChild')) {
+            fetch('http://localhost:3001/api/logs/add', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: '[DIAG] ' + text.slice(0, 1600), type: 'DIAG', category: 'error' })
+            }).catch(() => {});
+          }
+        } catch {}
+        orig.apply(console, args);
+      };
+    } catch {}
+  })()`
+  dashboardWindow.webContents.on('did-finish-load', () => {
+    dashboardWindow.webContents.executeJavaScript(REACT_DIAG).catch(() => {})
+  })
+  dashboardWindow.once('ready-to-show', () => dashboardWindow.show())
+  dashboardWindow.on('closed', () => { dashboardWindow = null })
 }
+
+// ── Global mouse tracking (feeds the companion's eye tracking) ───────────
+
+function startMouseTracking() {
+  if (mouseTimer) clearInterval(mouseTimer)
+  mouseTimer = setInterval(() => {
+    try {
+      const p = screen.getCursorScreenPoint()
+      if (p.x === lastMouse.x && p.y === lastMouse.y) return
+      lastMouse = { x: p.x, y: p.y }
+      // Both windows track the cursor: the companion's eyes AND the big
+      // stage on the dashboard.
+      if (companionWindow && !companionWindow.isDestroyed()) {
+        companionWindow.webContents.send('nimo:mouse', p)
+      }
+      if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+        dashboardWindow.webContents.send('nimo:mouse', p)
+      }
+    } catch { /* display gone to sleep, etc. */ }
+  }, 33) // ~30 fps
+}
+
+// ── Shared HTTP API (same routes as server.js) ───────────────────────────
 
 function startBackendHttpServer() {
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://localhost:${constants.HTTP_SERVER_PORT}`)
-    const pathname = url.pathname
-
-    // CORS preflight
-    if (req.method === 'OPTIONS') {
-      return sendJson(res, 204, '')
-    }
-
-    // Health check
-    if (req.method === 'GET' && pathname === '/api/health') {
-      return sendJson(res, 200, { ok: true, service: 'nimo-backend', ts: Date.now() })
-    }
-
-    // POST /api/run-command  ← nimo-os proxies here
-    if (req.method === 'POST' && pathname === '/api/run-command') {
-      try {
-        const body = await parseBody(req)
-        const { transcript, personality } = body
-
-        if (!transcript || !String(transcript).trim()) {
-          return sendJson(res, 400, { ok: false, error: 'Transcript is empty' })
-        }
-
-        // Parse the transcript into { intent, params }
-        const parsed = parseCommand(String(transcript))
-        if (!parsed) {
-          return sendJson(res, 200, {
-            ok: true,
-            action: 'unknown',
-            result: '',
-            speak: "I didn't catch that.",
-            state: 'confused'
-          })
-        }
-
-        // Dispatch to the full NIMO backend (all services + Claude AI).
-        const envelope = await dispatchIntent(parsed.intent, parsed.params, mainWindow)
-
-        return sendJson(res, 200, {
-          ok: true,
-          action: envelope.action || parsed.intent,
-          result: envelope.result || '',
-          speak: envelope.speak || '',
-          state: envelope.state || 'idle',
-          // passthrough fields nimo-os expects:
-          openUrl: envelope.openUrl || undefined,
-          timer: envelope.timer || undefined,
-          stop: envelope.stop || false
-        })
-      } catch (err) {
-        logger.error(`HTTP /api/run-command error: ${err.message}`)
-        return sendJson(res, 200, {
-          ok: false,
-          action: 'error',
-          result: err.message,
-          speak: "Something went wrong on my end.",
-          state: 'error'
-        })
-      }
-    }
-
-    // GET /api/timers — list active timers with remaining seconds
-    if (req.method === 'GET' && pathname === '/api/timers') {
-      try {
-        const timers = timerManager.listTimers().map(t => ({
-          id: t.id,
-          label: t.label,
-          minutes: t.minutes,
-          remaining: Math.max(0, Math.round(t.remainingMs / 1000)),
-          active: t.remainingMs > 0
-        }))
-        return sendJson(res, 200, { ok: true, timers })
-      } catch (err) {
-        return sendJson(res, 200, { ok: false, timers: [], error: err.message })
-      }
-    }
-
-    // POST /api/timers/cancel — cancel a timer by id
-    if (req.method === 'POST' && pathname === '/api/timers/cancel') {
-      try {
-        const body = await parseBody(req)
-        const ok = timerManager.cancelTimer(body.id)
-        return sendJson(res, 200, { ok, cancelled: ok })
-      } catch (err) {
-        return sendJson(res, 200, { ok: false, error: err.message })
-      }
-    }
-
-    // Unknown route
-    res.writeHead(404, CORS_HEADERS)
-    res.end(JSON.stringify({ ok: false, error: `No route ${req.method} ${pathname}` }))
-  })
-
-  server.on('error', (err) => {
-    logger.error(`HTTP server error: ${err.message}`)
-  })
-
+  const server = http.createServer(handleApiRequest)
+  server.on('error', (err) => logger.error(`HTTP server error: ${err.message}`))
   server.listen(constants.HTTP_SERVER_PORT, '127.0.0.1', () => {
-    logger.info(`NIMO backend HTTP server listening on port ${constants.HTTP_SERVER_PORT}.`)
-    logger.info(`nimo-os should proxy /api/run-command → http://localhost:${constants.HTTP_SERVER_PORT}/api/run-command`)
+    logger.info(`NIMO backend HTTP API listening on port ${constants.HTTP_SERVER_PORT}.`)
+    // Fresh session, fresh log: wipe the previous run's event buffer.
+    fetch(`http://127.0.0.1:${constants.HTTP_SERVER_PORT}/api/logs/clear`, { method: 'POST' })
+      .then(() => logger.info('Event log cleared for a fresh session.'))
+      .catch(() => {})
   })
 }
 
-async function bootstrap() {
-  logger.info(`NIMO booting up. NODE_ENV=${process.env.NODE_ENV || 'production'}.`)
-  await migrateApiKey()
+// ── Window control IPC (custom titlebars in the renderer) ────────────────
+
+function registerWindowControls() {
+  ipcMain.on('nimo:window-control', (_e, { action, value } = {}) => {
+    const win = BrowserWindow.fromWebContents(_e.sender) || dashboardWindow
+    if (!win) return
+    switch (action) {
+      case 'minimize': win.minimize(); break
+      case 'toggle-maximize': win.isMaximized() ? win.unmaximize() : win.maximize(); break
+      case 'toggle-fullscreen': win.setFullScreen(!win.isFullScreen()); break
+      case 'close': win.close(); break
+      case 'hide': win.hide(); break
+      case 'show': win.show(); break
+      case 'quit': app.quit(); break
+      case 'open-dashboard':
+        // Toggle: open the dashboard, or hide it if it's already showing.
+        if (dashboardWindow && !dashboardWindow.isDestroyed()) {
+          if (dashboardWindow.isVisible()) dashboardWindow.hide()
+          else { dashboardWindow.show(); dashboardWindow.focus() }
+        } else {
+          createDashboardWindow()
+        }
+        break
+      case 'show-companion': if (companionWindow) { companionWindow.show(); companionWindow.focus() } break
+      case 'hide-companion': if (companionWindow) companionWindow.hide(); break
+    }
+  })
+
+  // Renderer-driven dynamic sizing: grows/shrinks around the creature's
+  // anchor so it stays EXACTLY where the user dragged it — corners included.
+  // Only a 28px sliver is kept on-screen so the creature can never get lost.
+  ipcMain.handle('nimo:companion-resize', (_e, { width, height } = {}) => {
+    if (!companionWindow || companionWindow.isDestroyed()) return { ok: false }
+    if (!companionAnchor) captureCompanionAnchor()
+    if (!companionAnchor) return { ok: false }
+    const wa = screen.getPrimaryDisplay().workArea
+    const w = Math.max(120, Math.min(520, Math.round(width)))
+    const h = Math.max(140, Math.min(560, Math.round(height)))
+    let nx = Math.round(companionAnchor.cx - w / 2)
+    let ny = Math.round(companionAnchor.bottom - h)
+    nx = Math.min(Math.max(nx, wa.x - w + 28), wa.x + wa.width - 28)
+    ny = Math.min(Math.max(ny, wa.y - h + 28), wa.y + wa.height - 28)
+    suppressAnchorUntil = Date.now() + 300
+    companionWindow.setContentSize(w, h)
+    companionWindow.setPosition(nx, ny)
+    // When the clamp pulled the window (corner case), the creature moved
+    // with it — re-anchor to the clamped result.
+    companionAnchor = { cx: nx + w / 2, bottom: ny + h }
+    return { ok: true }
+  })
+
+  // Click-through mode: mouse events pass to the desktop below; with
+  // forward:true the renderer still receives hover moves and flips back to
+  // interactive whenever the cursor touches the creature.
+  ipcMain.handle('nimo:set-ignore-mouse', (_e, { value } = {}) => {
+    if (companionWindow && !companionWindow.isDestroyed()) {
+      companionWindow.setIgnoreMouseEvents(Boolean(value), { forward: true })
+    }
+    return { ok: true }
+  })
+
+  // Show/hide the floating companion from the dashboard.
+  ipcMain.handle('nimo:toggle-companion', () => {
+    if (!companionWindow || companionWindow.isDestroyed()) return { ok: false, visible: false }
+    if (companionWindow.isVisible()) {
+      companionWindow.hide()
+    } else {
+      companionWindow.show()
+      companionWindow.focus()
+    }
+    return { ok: true, visible: companionWindow.isVisible() }
+  })
 }
 
-// Migrate a Gemini API key in .env into the OS keychain on first launch.
+// ── Tray ─────────────────────────────────────────────────────────────────
+
+function assertIconPath() {
+  const candidates = ['icon.png', 'icon.ico', 'icon.icns']
+  return candidates.map((c) => path.join(process.cwd(), 'assets', c)).find((p) => fs.existsSync(p)) || null
+}
+
+function createTray() {
+  const iconPath = assertIconPath()
+  let image = nativeImage.createEmpty()
+  if (iconPath) image = nativeImage.createFromPath(iconPath)
+  try { tray = new Tray(image) } catch (err) {
+    logger.warn(`Tray icon could not be created: ${err.message}`)
+    return
+  }
+  tray.setToolTip('NIMO — your desktop companion')
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Show Companion', click: () => { if (companionWindow) { companionWindow.show(); companionWindow.focus() } } },
+    { label: 'Hide Companion', click: () => { if (companionWindow) companionWindow.hide() } },
+    { type: 'separator' },
+    { label: 'Open Dashboard', click: () => createDashboardWindow() },
+    { type: 'separator' },
+    { label: 'Quit NIMO', click: () => app.quit() }
+  ])
+  tray.setContextMenu(contextMenu)
+  tray.on('click', () => createDashboardWindow())
+}
+
+// ── Boot ─────────────────────────────────────────────────────────────────
+
 async function migrateApiKey() {
   try {
     const key = await initKey()
@@ -179,161 +353,53 @@ async function migrateApiKey() {
   }
 }
 
-function createMainWindow() {
-  mainWindow = new BrowserWindow({
-    width: constants.WINDOW_WIDTH,
-    height: constants.WINDOW_HEIGHT,
-    frame: false,
-    transparent: true,
-    resizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    hasShadow: false,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      webSecurity: true
-    }
-  })
-
-  // Send config to the renderer once it's ready.
-  mainWindow.webContents.on('did-finish-load', () => {
-    const uiConfig = {
-      WAKE_WORD: constants.WAKE_WORD,
-      TTS_RATE: constants.TTS_RATE,
-      TTS_PITCH: constants.TTS_PITCH,
-      TTS_LANG: constants.TTS_LANG,
-      DEFAULT_MUSIC_SERVICE: constants.DEFAULT_MUSIC_SERVICE,
-      DEFAULT_SEARCH_ENGINE: constants.DEFAULT_SEARCH_ENGINE,
-      AI_MODEL: constants.AI_MODEL
-    }
-    try {
-      mainWindow.webContents.send('nimo:config', uiConfig)
-    } catch (err) {
-      logger.error(`config send failed: ${err.message}`)
-    }
-  })
-
-  const uiPath = resolveUiPath()
-  if (/^https?:\/\//i.test(uiPath)) {
-    mainWindow.loadURL(uiPath)
-  } else {
-    const full = path.isAbsolute(uiPath) ? uiPath : path.join(process.cwd(), uiPath)
-    if (fs.existsSync(full)) {
-      mainWindow.loadFile(full)
-    } else {
-      logger.warn(`UI file not found at ${full}; loading a placeholder URL.`)
-      mainWindow.loadURL('data:text/html,%3Ch1%20style%3D%22font-family%3Asans-serif%3Bcolor%3A%2300E8D6%3B%22%3ENIMO%20backend%20ready.%20Place%20UI%20at%20.&#47;ui&#47;index.html%3C&#47;h1%3E')
-    }
-  }
-
-  // Always-on-top levels per platform (Windows needs screen-saver aware level).
-  mainWindow.setAlwaysOnTop(true, 'screen-saver')
-  mainWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
-  mainWindow.once('ready-to-show', () => mainWindow.show())
-
-  mainWindow.on('closed', () => {
-    mainWindow = null
-  })
-
-  // Allow the frameless window to be dragged via the renderer, and close.
-  ipcMain.on('nimo:window-control', (_e, { action } = {}) => {
-    if (!mainWindow) return
-    if (action === 'hide') mainWindow.hide()
-    else if (action === 'show') mainWindow.show()
-    else if (action === 'quit') app.quit()
-  })
-}
-
-function assertIconPath() {
-  const candidates = ['icon.png', 'icon.ico', 'icon.icns']
-  return candidates.map((c) => path.join(process.cwd(), 'assets', c)).find((p) => fs.existsSync(p)) || null
-}
-
-function createTray() {
-  const iconPath = assertIconPath()
-  let image = nativeImage.createEmpty()
-  if (iconPath) {
-    image = nativeImage.createFromPath(iconPath)
-  } else {
-    // 16x16 transparent-cyan square fallback so the tray still works.
-    image = nativeImage.createFromBuffer(Buffer.from(
-      'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9AAAAA6UlEQVR4AcXBQQ2CQABE0RPl' +
-      'wcFBcHBwUFBQEBQcFAQUHAQUHBQcHBwUHBQcFBQUHBQUFBwcFBwcHAAAsAQXCAQEBAQEBA' +
-      'QEBAAAAAAQEBAQEBAQEBAQEBAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAQEBAAAA' +
-      'AAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQAAA' +
-      'AAAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEB' +
-      'AQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAQ' +
-      'EBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAQEBAAA' +
-      'AAAQEBAQEBAQEBAAAAAAQEBAQEBAQEBAAAAAAQEBAQEBAQEB',
-      'base64'
-    ))
-  }
-  try { tray = new Tray(image) } catch (err) {
-    logger.warn(`Tray icon could not be created: ${err.message}`)
-    return
-  }
-  tray.setToolTip('NIMO — voice assistant')
-
-  const contextMenu = Menu.buildFromTemplate([
-    { label: 'Show NIMO', click: () => { if (mainWindow) mainWindow.show() } },
-    { label: 'Hide NIMO', click: () => { if (mainWindow) mainWindow.hide() } },
-    { type: 'separator' },
-    { label: 'Quit', click: () => app.quit() }
-  ])
-  tray.setContextMenu(contextMenu)
-  tray.on('click', () => {
-    if (!mainWindow) return
-    if (mainWindow.isVisible()) mainWindow.hide()
-    else mainWindow.show()
-  })
-}
-
-// --- App lifecycle -----------------------------------------------------
-
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
-      if (!mainWindow.isVisible()) mainWindow.show()
-      mainWindow.focus()
-    }
+    if (companionWindow) { companionWindow.show(); companionWindow.focus() }
+    createDashboardWindow()
   })
 
   app.whenReady().then(async () => {
-    await bootstrap()
-    createMainWindow()
-    createTray()
-    try {
-      registerAllIpc(mainWindow)
-    } catch (err) {
-      logger.error(`IPC registration failed: ${err.message}`)
-    }
+    logger.info(`NIMO booting. NODE_ENV=${process.env.NODE_ENV || 'production'}.`)
+    await migrateApiKey()
 
-    // Start HTTP server for nimo-os proxy (port 3001).
+    setContext({ mainWindow: null, dispatchIntent }) // full dispatch for the HTTP API
+    registerAllIpc(null)
+    registerWindowControls()
+
+    createCompanionWindow()
+    createDashboardWindow()
+
+    // The dispatch path needs a live window reference for state pushes.
+    setContext({ mainWindow: companionWindow })
     startBackendHttpServer()
+    startMouseTracking()
 
-    // macOS: re-create window on dock click.
+    // Optional: global hotkey to summon the dashboard (Ctrl+Alt+N).
+    try {
+      globalShortcut.register('Control+Alt+N', () => createDashboardWindow())
+    } catch { /* shortcut may be taken */ }
+
+    createTray()
+
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createMainWindow()
+      if (BrowserWindow.getAllWindows().length === 0) createCompanionWindow()
     })
   })
 
   app.on('window-all-closed', () => {
-    // Keep tray alive on all platforms; quit only on explicit Quit.
+    // Tray keeps running; quit only via explicit Quit.
     if (process.platform !== 'darwin') app.quit()
   })
 
   app.on('before-quit', () => {
+    if (mouseTimer) clearInterval(mouseTimer)
+    try { globalShortcut.unregisterAll() } catch { /* noop */ }
     logger.info('NIMO shutting down.')
   })
 }
 
-module.exports = { registerAllIpc, createMainWindow, createTray, currentTimeDate }
+module.exports = { createCompanionWindow, createDashboardWindow, createTray }

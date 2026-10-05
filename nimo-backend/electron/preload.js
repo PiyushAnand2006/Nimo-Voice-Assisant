@@ -2,19 +2,21 @@
  * electron/preload.js
  * Context bridge: exposes a tightly-scoped `window.nimo` API to the renderer.
  *
- * No Node/Electron modules are exposed directly — only the three safe
- * primitives the UI needs: invoke (request/response), on (subscribe), off
- * (unsubscribe).
+ * No Node/Electron modules are exposed directly — only whitelisted
+ * invoke (request/response), on/off (subscribe), and windowControl
+ * (fire-and-forget) primitives.
  */
 
 const { contextBridge, ipcRenderer } = require('electron')
 
 /**
- * Whitelist of channels the renderer is allowed to invoke (request/response).
+ * Whitelist of channels the renderer is allowed to invoke.
  */
 const INVOKABLE = new Set([
   'nimo:run-command',
   'nimo:ai-query',
+  'nimo:agent',
+  'nimo:set-personality',
   'nimo:set-volume',
   'nimo:open-app',
   'nimo:play-music',
@@ -25,9 +27,14 @@ const INVOKABLE = new Set([
   'nimo:list-timers',
   'nimo:get-time',
   'nimo:get-weather',
+  'nimo:list-apps',
+  'nimo:search-files',
   'nimo:save-api-key',
   'nimo:has-api-key',
-  'nimo:state-event'
+  'nimo:state-event',
+  'nimo:set-ignore-mouse',
+  'nimo:companion-resize',
+  'nimo:toggle-companion'
 ])
 
 /**
@@ -37,7 +44,8 @@ const RENDERABLE = new Set([
   'nimo:timer-done',
   'nimo:state-change',
   'nimo:speak',
-  'nimo:config'
+  'nimo:config',
+  'nimo:mouse'
 ])
 
 const invoker = (channel, data) => {
@@ -64,5 +72,7 @@ const remover = (channel, cb) => {
 contextBridge.exposeInMainWorld('nimo', {
   invoke: invoker,
   on: subscriber,
-  off: remover
+  off: remover,
+  windowControl: (action) => ipcRenderer.send('nimo:window-control', { action }),
+  platform: process.platform
 })
