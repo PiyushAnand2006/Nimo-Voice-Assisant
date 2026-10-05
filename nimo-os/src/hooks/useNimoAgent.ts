@@ -99,6 +99,14 @@ export function useNimoAgent(opts: { autoVoice?: boolean; sessionId?: string; li
     return () => window.removeEventListener('storage', onStorage)
   }, [])
 
+  // Cloud popup auto-dismiss: the answer clears itself after a while
+  // (longer answers stay longer). Close ✕ on the cloud clears instantly.
+  useEffect(() => {
+    if (!caption) return
+    const t = setTimeout(() => setCaption(''), Math.min(20000, 8000 + caption.length * 30))
+    return () => clearTimeout(t)
+  }, [caption])
+
   const voiceEnabledRef = useRef(voiceEnabled)
   voiceEnabledRef.current = voiceEnabled
   const wakeRequiredRef = useRef(wakeRequired)

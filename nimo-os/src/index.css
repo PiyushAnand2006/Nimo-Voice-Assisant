@@ -151,22 +151,13 @@ html, body, #root {
 
 /* ═══ Cloud popup (floating companion, silent mode) ═════════════════════ */
 
-/* Cloud body + scalloped bumps share one solid fill so the silhouette
-   merges into a single cloud shape. */
-.cloud-body { background: #0a0e24; border: 1px solid rgba(109, 126, 242, 0.35); }
-.cloud-bump {
-  background: #0a0e24;
-  border: 1px solid rgba(109, 126, 242, 0.35);
-  border-bottom: none;
-  border-radius: 9999px 9999px 0 0;
-  z-index: -1;
-}
-.cloud-dot {
-  background: #0a0e24;
-  border: 1px solid rgba(109, 126, 242, 0.3);
-  border-radius: 9999px;
-}
-.cloud-body, .cloud-bump { backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+/* Thought-cloud from the reference: two lobe layers — the outline layer is
+   a slightly larger navy circle behind each fill circle, so overlapping
+   lobes read as one scalloped cloud with a unified dark outline. */
+.cloud-lobe { position: absolute; border-radius: 9999px; transform: translate(-50%, -50%); }
+.cloud-lobe-outline { background: #39418a; }
+.cloud-lobe-fill { background: #0a0e24; }
+.cloud-well { background: #0a0e24; }
 
 /* OPACITY-ONLY animations for use INSIDE the big stage SVG — Chromium throws
    DOMException when React commits DOM changes around transform-animated SVG
