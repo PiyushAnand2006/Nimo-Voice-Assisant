@@ -10,6 +10,8 @@ Not a chatbot in a tab. A companion on your desktop.
 
 <p align="center">
   <img src="screenshots/floating-companion.png" alt="The floating companion hovering over the desktop" width="320" />
+  <br/>
+  <img src="screenshots/silent-cloud.png" alt="Silent mode — the answer appears in a thought-cloud above the icon" width="320" />
 </p>
 
 > 🎨 The character design (blue dome, star, googly eyes, blush, pointer buddy) is NIMO's own SVG recreation, inspired by the aesthetic of [bluey-by-riley](https://github.com/rbrown101010/bluey-by-riley) — all code here is original React/SVG.

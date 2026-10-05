@@ -29,3 +29,6 @@ Thumbs.db
 
 # Agent-local tool state
 .mimosa/
+
+# ZCode session state
+.zcode/

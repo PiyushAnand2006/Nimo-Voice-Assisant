@@ -10,7 +10,7 @@
  * cursor touches it and click-through again when the cursor leaves.
  */
 
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Mic, MicOff, LayoutDashboard, Send, Lock, Unlock, X, CheckCircle2, XCircle, Radio, VolumeX } from 'lucide-react'
 import FloatingBlob from '../components/FloatingBlob'
@@ -64,21 +64,26 @@ export default function OverlayApp() {
   } = useNimoAgent({ autoVoice: true, sessionId: 'companion' })
 
   // The cloud measures itself from the text well and grows/shrinks with it.
+  // Attached via ref callback: AnimatePresence mode="wait" mounts the NEW
+  // well only after the old cloud finishes exiting, so an effect keyed on
+  // [caption, busy] would measure the dying well and leave cloudSize stale
+  // (dots and rim landing inside the box). offsetWidth/offsetHeight read
+  // layout size, immune to the entrance scale transform.
   const [draft, setDraft] = useState('')
-  const cloudWellRef = useRef<HTMLDivElement>(null)
+  const wellRoRef = useRef<ResizeObserver | null>(null)
   const [cloudSize, setCloudSize] = useState({ w: 130, h: 74 })
-  useEffect(() => {
-    const el = cloudWellRef.current
-    if (!el || !caption) return
-    const ro = new ResizeObserver(() => {
-      const r = el.getBoundingClientRect()
-      if (r.width > 20) setCloudSize({ w: r.width, h: r.height })
-    })
-    ro.observe(el)
-    const r = el.getBoundingClientRect()
-    if (r.width > 20) setCloudSize({ w: r.width, h: r.height })
-    return () => ro.disconnect()
-  }, [caption, busy])
+  const measureWell = useCallback((el: HTMLDivElement | null) => {
+    wellRoRef.current?.disconnect()
+    wellRoRef.current = null
+    if (!el) return
+    const read = () => {
+      if (el.offsetWidth > 20) setCloudSize({ w: el.offsetWidth, h: el.offsetHeight })
+    }
+    const ro = new ResizeObserver(read)
+    ro.observe(el) // also fires once right away with the current size
+    wellRoRef.current = ro
+    read()
+  }, [])
   const cloudLobes = useMemo(
     () => buildCloudLobes(cloudSize.w, cloudSize.h),
     [cloudSize.w, cloudSize.h]
@@ -152,7 +157,7 @@ export default function OverlayApp() {
   // Idle is sized to hug the face exactly — no border, no dead margins.
   const expanded = bubbleVisible || inputOpen || hoverStable || !isElectron
   const W = expanded ? (inputOpen ? 330 : 330) : 124
-  const H = inputOpen ? 350 : bubbleVisible ? 300 : hoverStable ? 186 : 140
+  const H = inputOpen ? 452 : bubbleVisible ? 356 : hoverStable ? 200 : 140
   useEffect(() => {
     if (!isElectron) return
     bridge.invoke('nimo:companion-resize', { width: W, height: H }).catch(() => {})
@@ -182,7 +187,7 @@ export default function OverlayApp() {
               sits right above the creature; auto-dismisses; close ✕ inside ═══ */}
       <div
         className="pointer-events-none absolute left-1/2 z-20 -translate-x-1/2"
-        style={{ bottom: inputOpen ? 248 : hoverStable ? 188 : 152 }}
+        style={{ bottom: inputOpen ? 264 : hoverStable ? 200 : 170 }}
       >
         <AnimatePresence mode="wait">
           {(caption || busy) && (
@@ -212,7 +217,7 @@ export default function OverlayApp() {
               ))}
               {/* Content well — sizes the cloud to the text */}
               <div
-                ref={cloudWellRef}
+                ref={measureWell}
                 className={`cloud-well relative rounded-[22px] px-[26px] py-[20px] text-[12px] leading-relaxed ${needsClarification ? 'text-amber-200' : 'text-white/90'}`}
               >
                 {/* Close ✕ */}
