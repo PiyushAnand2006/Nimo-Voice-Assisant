@@ -11,7 +11,7 @@
  * Returns: { success, launched, error? }
  */
 
-const { exec } = require('child_process')
+const { spawn } = require('child_process')
 const osDetect = require('../../utils/osDetect')
 const logger = require('../../utils/logger')
 const browserLauncher = require('./browserLauncher')
@@ -170,11 +170,20 @@ function fuzzyMatch(name, platform) {
  * within ~5s as a failure.
  */
 function run(cmd) {
+  // Static map commands only: tokenized and spawned WITHOUT a shell, so no
+  // value can ever be interpreted by a command interpreter. Windows `start`
+  // is a cmd builtin and gets cmd.exe with the tokens as separate arguments.
+  const tokens = String(cmd).trim().split(/\s+/)
+  const bin = tokens[0]
+  const args = tokens.slice(1)
+  const child = process.platform === 'win32' && bin === 'start'
+    ? spawn('cmd.exe', ['/c', 'start', ...args], { shell: false, detached: true, stdio: 'ignore' })
+    : spawn(bin, args, { shell: false, detached: true, stdio: 'ignore' })
   return new Promise((resolve) => {
-    exec(cmd, { timeout: 5000 }, (err, _stdout, _stderr) => {
-      if (err) return resolve(false)
-      resolve(true)
-    })
+    child.once('error', () => resolve(false))
+    child.once('spawn', () => resolve(true))
+    setTimeout(() => resolve(true), 3000)
+    try { child.unref() } catch { /* noop */ }
   })
 }
 

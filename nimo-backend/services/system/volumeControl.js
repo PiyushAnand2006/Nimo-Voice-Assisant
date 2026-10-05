@@ -11,7 +11,7 @@
  * { level, device?, error? }.
  */
 
-const { exec, execSync } = require('child_process')
+const { execFileSync } = require('child_process')
 const osDetect = require('../../utils/osDetect')
 const constants = require('../../config/constants')
 const logger = require('../../utils/logger')
@@ -30,15 +30,29 @@ function clamp(n) {
   return Math.max(VOLUME_MIN, Math.min(VOLUME_MAX, Math.round(n)))
 }
 
-function run(cmd, timeout = 4000) {
+// Safe runners: no shell string interpolation anywhere — PowerShell scripts
+// go through -EncodedCommand, other platforms use execFile argument arrays.
+const { execFile } = require('child_process')
+
+function runPs(script, timeout = 6000) {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
   return new Promise((resolve) => {
-    exec(cmd, { timeout }, (err, _stdout, _stderr) => resolve(!err))
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { timeout, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err) return resolve(null)
+      resolve(stdout ? stdout.trim() : null)
+    })
   })
 }
 
-function runWithOutput(cmd, timeout = 6000) {
+function runArgs(bin, args, timeout = 4000) {
   return new Promise((resolve) => {
-    exec(cmd, { timeout, maxBuffer: 1024 * 1024 }, (err, stdout, _stderr) => {
+    execFile(bin, args, { timeout, shell: false }, (err) => resolve(!err))
+  })
+}
+
+function runArgsWithOutput(bin, args, timeout = 6000) {
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout, shell: false, maxBuffer: 1024 * 1024 }, (err, stdout) => {
       if (err) return resolve(null)
       resolve(stdout ? stdout.trim() : null)
     })
@@ -180,13 +194,16 @@ async function getVolume() {
     }
   } else if (platform === 'darwin') {
     try {
-      const out = await runWithOutput(`osascript -e 'output volume of (get volume settings)'`)
+      const out = await runArgsWithOutput('osascript', ['-e', 'output volume of (get volume settings)'])
       if (out) { const v = parseInt(out, 10); if (!isNaN(v)) return clamp(v) }
     } catch {}
   } else {
     try {
-      const out = await runWithOutput(`amixer -D pulse get Master | grep -oP '\\[\\d+%\\]' | head -1 | tr -d '[]%'`)
-      if (out) { const v = parseInt(out, 10); if (!isNaN(v)) return clamp(v) }
+      const out = await runArgsWithOutput('amixer', ['-D', 'pulse', 'get', 'Master'])
+      if (out) {
+        const m = out.match(/\[(\d+)%\]/)
+        if (m) return clamp(parseInt(m[1], 10))
+      }
     } catch {}
   }
   return 50
@@ -214,11 +231,11 @@ async function setVolume(value) {
     logger.error('PowerShell setVolume failed.')
     return null
   } else if (platform === 'darwin') {
-    const ok = await run(`osascript -e 'set volume output volume ${level}'`)
+    const ok = await runArgs('osascript', ['-e', `set volume output volume ${level}`])
     if (!ok) logger.error('macOS setVolume failed.')
     return ok ? level : null
   } else {
-    const ok = await run(`amixer -D pulse sset Master ${level}% > /dev/null 2>&1`)
+    const ok = await runArgs('amixer', ['-D', 'pulse', 'sset', 'Master', `${level}%`])
     if (!ok) logger.error('Linux setVolume failed.')
     return ok ? level : null
   }

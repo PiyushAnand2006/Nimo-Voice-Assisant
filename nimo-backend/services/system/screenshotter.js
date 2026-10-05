@@ -52,7 +52,7 @@ async function takeScreenshot() {
     throw new NimoError('SCREENSHOT_EMPTY', 'Captured image was empty.', "I captured an empty screenshot.", 'error')
   }
 
-  const dir = path.join(app.getPath('pictures'), constants.SCREENSHOT_DIR)
+  const dir = path.resolve(path.join(app.getPath('pictures'), constants.SCREENSHOT_DIR))
   if (!fs.existsSync(dir)) {
     try {
       fs.mkdirSync(dir, { recursive: true })
@@ -61,9 +61,14 @@ async function takeScreenshot() {
     }
   }
 
+  // Filename is generated internally — assert containment anyway so the
+  // write can never land outside the screenshots folder.
   const ts = new Date().toISOString().replace(/[:.]/g, '-')
-  const filename = `nimo-${ts}.png`
-  const filePath = path.join(dir, filename)
+  const filename = path.basename(`nimo-${ts}.png`)
+  const filePath = path.resolve(path.join(dir, filename))
+  if (!filePath.startsWith(dir + path.sep)) {
+    throw new NimoError('SCREENSHOT_PATH', 'Resolved path escaped the screenshots folder.', "I couldn't save the screenshot.", 'error')
+  }
 
   try {
     fs.writeFileSync(filePath, png)
