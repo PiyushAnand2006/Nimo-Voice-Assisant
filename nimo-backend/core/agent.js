@@ -25,6 +25,7 @@ const { NimoError } = require('../utils/errorHandler')
 const { toolDeclarations, executeTool } = require('./agentTools')
 const pendingActions = require('./pendingActions')
 const runtimeSettings = require('./runtimeSettings')
+const chatHistoryStore = require('../services/chat/chatHistoryStore')
 
 const { AI_MODEL, AI_MAX_TOKENS, AGENT_MAX_STEPS, AGENT_HISTORY_TURNS } = constants
 
@@ -104,6 +105,20 @@ function pushHistory(session, role, text) {
   const maxEntries = AGENT_HISTORY_TURNS * 2
   if (session.history.length > maxEntries) {
     session.history = session.history.slice(-maxEntries)
+  }
+}
+
+async function persistMessage(sessionId, role, text, metadata = {}) {
+  try {
+    await chatHistoryStore.saveMessage({
+      sessionId: sessionId || 'default',
+      role,
+      text,
+      metadata
+    })
+  } catch (err) {
+    // Chat persistence must never make the assistant request fail.
+    logger.warn(`chat history persistence failed: ${err.message}`)
   }
 }
 
@@ -196,6 +211,8 @@ async function runAgent({ text, sessionId, personality }) {
           steps.push({ tool: fc.name, args: fc.args || {}, ok: true, summary: `Waiting for approval: ${result.data?.summary || fc.name}` })
           pushHistory(session, 'user', input)
           pushHistory(session, 'model', `I need your approval: ${result.data?.summary || fc.name}.`)
+          await persistMessage(sessionId, 'user', input, { source: 'agent', state: 'approval_requested' })
+          await persistMessage(sessionId, 'assistant', `I need your approval: ${result.data?.summary || fc.name}.`, { source: 'agent', state: 'approval_requested' })
           return {
             action: 'agent_approval',
             speak: `I need your approval for this one: ${result.data?.summary || fc.name}. ${result.data?.reason || ''}`.trim(),
@@ -247,6 +264,8 @@ async function runAgent({ text, sessionId, personality }) {
     // Persist the exchange so follow-ups keep context.
     pushHistory(session, 'user', input)
     pushHistory(session, 'model', finalText)
+    await persistMessage(sessionId, 'user', input, { source: 'agent' })
+    await persistMessage(sessionId, 'assistant', finalText, { source: 'agent' })
 
     const state = needsClarification ? 'confused' : (steps.length ? 'happy' : 'talking')
 
@@ -297,6 +316,8 @@ async function applyApproval({ sessionId, pendingId, approved }) {
   if (!approved) {
     pushHistory(session, 'user', '[The user declined the proposed action.]')
     pushHistory(session, 'model', 'Okay, I dropped that — nothing was written.')
+    await persistMessage(sid, 'user', '[The user declined the proposed action.]', { source: 'approval', approved: false })
+    await persistMessage(sid, 'assistant', 'Okay, I dropped that — nothing was written.', { source: 'approval', approved: false })
     return {
       ok: true,
       action: 'agent',
@@ -318,6 +339,8 @@ async function applyApproval({ sessionId, pendingId, approved }) {
 
   pushHistory(session, 'user', `[The user approved the proposed action: ${entry.summary}]`)
   pushHistory(session, 'model', resultText)
+  await persistMessage(sid, 'user', `[The user approved the proposed action: ${entry.summary}]`, { source: 'approval', approved: true })
+  await persistMessage(sid, 'assistant', resultText, { source: 'approval', approved: true })
 
   return {
     ok: result.ok,

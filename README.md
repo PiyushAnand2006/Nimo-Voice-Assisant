@@ -101,6 +101,16 @@ cd nimo-os && npm run dev           # UI on :3000 (proxies /api → :3001)
 ### Gemini API key
 Put `GEMINI_API_KEY=...` in `nimo-backend/.env` (or set it in the UI settings) — it is migrated into the OS keychain on first launch. Add `ELEVENLABS_API_KEY=...` for the ElevenLabs voice.
 
+### MongoDB chat history (optional)
+NIMO can persist user and assistant messages in MongoDB. Add these values to `nimo-backend/.env`:
+
+```env
+MONGODB_URI=mongodb://127.0.0.1:27017
+MONGODB_DB_NAME=nimo
+```
+
+Messages are stored in the `chat_messages` collection with the session ID, role, text, timestamp, and source metadata. If `MONGODB_URI` is not set, the assistant continues to work with its existing in-memory context and does not require MongoDB.
+
 ---
 
 ## 🧭 Architecture

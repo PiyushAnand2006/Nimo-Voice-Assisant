@@ -147,5 +147,6 @@ Place icons at `assets/icon.ico`, `assets/icon.icns`, `assets/icon.png`.
 
 - API key is held in the OS keychain via `keytar` (`config/keystore.js`).
 - First launch migrates `.env → keychain`, then blanks the env var at runtime.
+- Chat history persistence is optional. Set `MONGODB_URI` (and optionally `MONGODB_DB_NAME`) in `.env` to store messages in the `chat_messages` collection. If it is unset or unavailable, NIMO continues with in-memory conversation context.
 - Renderer runs with `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`.
 - Only whitelisted channels are reachable through `contextBridge`.

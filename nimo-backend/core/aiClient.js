@@ -12,6 +12,7 @@ const { GoogleGenAI } = require('@google/genai')
 const constants = require('../config/constants')
 const logger = require('../utils/logger')
 const { NimoError } = require('../utils/errorHandler')
+const chatHistoryStore = require('../services/chat/chatHistoryStore')
 
 const { AI_MODEL, AI_MAX_TOKENS, AI_SYSTEM_PROMPT, AI_HISTORY_LENGTH } = constants
 
@@ -45,9 +46,10 @@ function getClient() {
  * Send userText to Gemini, using the rolling history window.
  * @param {string} userText
  * @param {Array<{role:string, content:string}>} [conversationHistory] Optional override history.
+ * @param {string} [sessionId] Session identifier used for optional persistence.
  * @returns {Promise<string>} the assistant reply text.
  */
-async function askClaude(userText, conversationHistory) {
+async function askClaude(userText, conversationHistory, sessionId = 'legacy') {
   if (!userText || !userText.trim()) return ''
 
   const ai = getClient()
@@ -78,6 +80,23 @@ async function askClaude(userText, conversationHistory) {
       if (history.length > maxEntries) {
         history = history.slice(-maxEntries)
       }
+    }
+
+    try {
+      await chatHistoryStore.saveMessage({
+        sessionId: sessionId || 'legacy',
+        role: 'user',
+        text: userText,
+        metadata: { source: 'legacy-ai-query' }
+      })
+      await chatHistoryStore.saveMessage({
+        sessionId: sessionId || 'legacy',
+        role: 'assistant',
+        text: reply,
+        metadata: { source: 'legacy-ai-query' }
+      })
+    } catch (err) {
+      logger.warn(`chat history persistence failed: ${err.message}`)
     }
 
     logger.debug(`askClaude reply: "${reply}"`)

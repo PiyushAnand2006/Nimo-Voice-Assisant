@@ -60,7 +60,11 @@ function createChatHistoryStore(options = {}) {
     initPromise = (async () => {
       let nextClient = null
       try {
-        nextClient = createClient(uri, initOptions.clientOptions)
+        nextClient = createClient(uri, {
+          serverSelectionTimeoutMS: 3000,
+          connectTimeoutMS: 3000,
+          ...(initOptions.clientOptions || {})
+        })
         await nextClient.connect()
         collection = nextClient.db(getDbName()).collection(COLLECTION_NAME)
         client = nextClient

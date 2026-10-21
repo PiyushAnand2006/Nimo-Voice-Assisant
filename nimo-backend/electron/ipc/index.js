@@ -247,11 +247,11 @@ function registerAllIpc(mainWindow) {
   })
 
   // --- Direct AI query (no parsing) ---
-  ipcMain.handle('nimo:ai-query', async (_e, { text, history }) => {
+  ipcMain.handle('nimo:ai-query', async (_e, { text, history, sessionId } = {}) => {
     try {
       if (!text) return format(new Error('No text supplied.'), 'AI')
       pushStateChange(mainWindow, 'thinking')
-      const reply = await askClaude(text, history)
+      const reply = await askClaude(text, history, sessionId || 'ipc-legacy')
       pushSpeak(mainWindow, reply)
       return { ok: true, data: { text: reply } }
     } catch (err) {
