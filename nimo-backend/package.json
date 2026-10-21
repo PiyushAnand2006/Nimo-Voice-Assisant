@@ -21,7 +21,8 @@
     "dotenv": "^16.4.5",
     "fastest-levenshtein": "^1.0.16",
     "keytar": "^7.9.0",
-    "loudness": "^0.4.1"
+    "loudness": "^0.4.1",
+    "mongodb": "^6.21.0"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
