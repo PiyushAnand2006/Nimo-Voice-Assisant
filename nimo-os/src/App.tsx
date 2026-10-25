@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from "react";
 import {
   Mic, MicOff, Volume2, Bell, X, FolderSearch, AppWindow, Camera, Sparkles,
   CheckCircle2, XCircle, Loader2, Minus, Square, Send, Terminal, Settings,
-  Wand2, Maximize, Minimize, Radio, MoonStar, Eye, EyeOff
+  Wand2, Maximize, Minimize, Radio, MoonStar, Eye, EyeOff, KeyRound, ExternalLink
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import NimoFace from "./components/NimoFace";
@@ -65,6 +65,46 @@ export default function App() {
   const [fileHits, setFileHits] = useState<FileHit[]>([]);
   const [fileSearching, setFileSearching] = useState(false);
   const logsEndRef = useRef<HTMLDivElement>(null);
+
+  // ── API keys (runtime provider config — no .env editing) ────────────────
+  type ApiProvider = "gemini" | "elevenlabs";
+  type ApiKeyStatus = { configured: boolean; masked: string };
+  const [keyStatus, setKeyStatus] = useState<Partial<Record<ApiProvider, ApiKeyStatus>>>({});
+  const [keyDrafts, setKeyDrafts] = useState<Record<ApiProvider, string>>({ gemini: "", elevenlabs: "" });
+  const [keyVisible, setKeyVisible] = useState<Record<ApiProvider, boolean>>({ gemini: false, elevenlabs: false });
+  const [keySaving, setKeySaving] = useState<ApiProvider | null>(null);
+  const [keySaved, setKeySaved] = useState<ApiProvider | null>(null);
+
+  const fetchKeyStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/api/keys`);
+      if (res.ok) setKeyStatus((await res.json()).keys || {});
+    } catch { /* offline */ }
+  }, [API]);
+
+  useEffect(() => { fetchKeyStatus(); }, [fetchKeyStatus]);
+
+  const saveApiKey = async (provider: ApiProvider) => {
+    const key = keyDrafts[provider].trim();
+    if (key.length < 8) return;
+    setKeySaving(provider);
+    try {
+      const res = await fetch(`${API}/api/keys`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, key })
+      });
+      const data = await res.json();
+      if (data?.ok) {
+        setKeySaved(provider);
+        setKeyDrafts((d) => ({ ...d, [provider]: "" }));
+        await fetchKeyStatus();
+        setTimeout(() => setKeySaved((p) => (p === provider ? null : p)), 2500);
+      }
+    } catch { /* offline */ } finally {
+      setKeySaving(null);
+    }
+  };
 
   // ── Logs & timers polling ───────────────────────────────────────────────
   const syncLogsAndTimers = useCallback(async () => {
@@ -612,6 +652,55 @@ export default function App() {
                 </>
               ) : (
                 <>
+                  {/* API keys — configure providers at runtime */}
+                  <div className="rounded-2xl border border-white/10 bg-black/30 p-4">
+                    <p className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.2em] text-white/40"><KeyRound className="h-3.5 w-3.5" /> API keys · providers</p>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-white/40">
+                      NIMO answers with <span className="text-white/70">Google Gemini</span> and speaks with <span className="text-white/70">ElevenLabs</span> — without an ElevenLabs key it falls back to your system voice. Keys are stored in your OS keychain, never in .env.
+                    </p>
+                    {([
+                      { id: "gemini", name: "Google Gemini", use: "text, vision & speech-to-text", guide: "https://aistudio.google.com/app/apikey", guideName: "Google AI Studio" },
+                      { id: "elevenlabs", name: "ElevenLabs", use: "voice replies (TTS)", guide: "https://elevenlabs.io/app/settings/api-keys", guideName: "ElevenLabs dashboard" }
+                    ] as Array<{ id: ApiProvider; name: string; use: string; guide: string; guideName: string }>).map((p) => {
+                      const status = keyStatus[p.id];
+                      return (
+                        <div key={p.id} className="mt-3 rounded-xl border border-white/10 bg-black/40 p-3">
+                          <div className="flex items-center justify-between gap-2">
+                            <p className="text-[12px] text-white/80"><span className="font-semibold">{p.name}</span> <span className="text-white/35">· {p.use}</span></p>
+                            {status?.configured ? (
+                              <span className="flex shrink-0 items-center gap-1 rounded-full bg-[#5eead4]/10 px-2 py-0.5 font-mono text-[10px] text-[#5eead4]"><CheckCircle2 className="h-3 w-3" />{status.masked}</span>
+                            ) : (
+                              <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-300"><XCircle className="h-3 w-3" />not set</span>
+                            )}
+                          </div>
+                          <div className="mt-2 flex gap-2">
+                            <input
+                              type={keyVisible[p.id] ? "text" : "password"}
+                              value={keyDrafts[p.id]}
+                              onChange={(e) => setKeyDrafts((d) => ({ ...d, [p.id]: e.target.value }))}
+                              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveApiKey(p.id); } }}
+                              placeholder={status?.configured ? "replace key…" : "paste your key…"}
+                              autoComplete="off"
+                              className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-[12px] outline-none focus:border-[#6d7ef2]/60"
+                            />
+                            <button onClick={() => setKeyVisible((v) => ({ ...v, [p.id]: !v[p.id] }))} title={keyVisible[p.id] ? "Hide key" : "Show key"} className="rounded-xl border border-white/10 px-2 text-white/40 transition-all hover:text-white">
+                              {keyVisible[p.id] ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </button>
+                            <button
+                              onClick={() => saveApiKey(p.id)}
+                              disabled={keySaving === p.id || keyDrafts[p.id].trim().length < 8}
+                              className="rounded-xl bg-[#6d7ef2]/20 px-3 text-[#a9b8ff] transition-all hover:bg-[#6d7ef2]/30 disabled:opacity-40"
+                            >
+                              {keySaving === p.id ? <Loader2 className="h-4 w-4 animate-spin" /> : keySaved === p.id ? <CheckCircle2 className="h-4 w-4 text-[#5eead4]" /> : "Save"}
+                            </button>
+                          </div>
+                          <a href={p.guide} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-[11px] text-[#a9b8ff] hover:underline">
+                            Get a key from the {p.guideName} <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </div>
+                      );
+                    })}
+                  </div>
                   {/* Mood */}
                   <div>
                     <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Mood · how NIMO talks</p>

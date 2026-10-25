@@ -177,6 +177,10 @@ app.post("/api/os/search-files", (req, res) => proxyToBackend(req, res, "/api/os
 // GET /api/timers — active countdown timers.
 app.get("/api/timers", (_req, res) => proxyToBackend(_req, res, "/api/timers"));
 
+// GET/POST /api/keys — provider API key status / save (key never logged).
+app.get("/api/keys", (req, res) => proxyToBackend(req, res, "/api/keys"));
+app.post("/api/keys", (req, res) => proxyToBackend(req, res, "/api/keys"));
+
 // POST /api/tts — proxy to NIMO backend for ElevenLabs TTS.
 app.post("/api/tts", async (req, res) => {
   const { text, opts } = req.body || {};

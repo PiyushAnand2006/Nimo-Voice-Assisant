@@ -14,6 +14,8 @@
  *   GET  /api/os/apps?filter=
  *   POST /api/os/search-files { name, folder? }
  *   POST /api/tts           { text, opts? }
+ *   GET  /api/keys          → provider key presence + masked tails
+ *   POST /api/keys          { provider: 'gemini'|'elevenlabs', key } → save
  */
 
 const constants = require('../config/constants')
@@ -26,6 +28,7 @@ const fileSearch = require('../services/system/fileSearch')
 const timerManager = require('../services/system/timerManager')
 const elevenLabsTts = require('../services/tts/elevenLabsTts')
 const runtimeSettings = require('./runtimeSettings')
+const keystore = require('../config/keystore')
 
 let mainWindowRef = null
 let dispatchIntentRef = null
@@ -273,6 +276,46 @@ async function handleApiRequest(req, res) {
       pushLog(`Computer control mode: ${mode}`, 'SETTINGS', 'info')
       return sendJson(res, 200, { ok: true, mode })
     } catch (err) {
+      return sendJson(res, 200, { ok: false, error: err.message })
+    }
+  }
+
+  // ---- API keys: configure providers at runtime (no .env editing) ----
+  // GET returns only presence + a masked tail — never the key itself.
+  if (req.method === 'GET' && pathname === '/api/keys') {
+    try {
+      const mask = (key) => (key ? `••••${String(key).slice(-4)}` : '')
+      const [gemini, elevenlabs] = await Promise.all([keystore.getKey(), keystore.getElevenLabsKey()])
+      return sendJson(res, 200, {
+        ok: true,
+        keys: {
+          gemini: { configured: Boolean(gemini), masked: mask(gemini) },
+          elevenlabs: { configured: Boolean(elevenlabs), masked: mask(elevenlabs) }
+        }
+      })
+    } catch (err) {
+      return sendJson(res, 200, { ok: false, error: err.message })
+    }
+  }
+
+  if (req.method === 'POST' && pathname === '/api/keys') {
+    try {
+      const body = await parseBody(req)
+      const provider = body.provider === 'elevenlabs' ? 'elevenlabs' : 'gemini'
+      const key = String(body.key || '').trim()
+      if (key.length < 8) return sendJson(res, 400, { ok: false, error: 'That key looks too short' })
+      const saved = provider === 'elevenlabs'
+        ? await keystore.saveElevenLabsKey(key)
+        : await keystore.saveKey(key)
+      // Both services read process.env lazily at call time, so this makes the
+      // key live immediately; keystore init re-populates env from the
+      // keychain on every boot.
+      if (provider === 'elevenlabs') process.env.ELEVENLABS_API_KEY = key
+      else process.env.GEMINI_API_KEY = key
+      pushLog(`${provider === 'elevenlabs' ? 'ElevenLabs (voice)' : 'Gemini (text)'} API key updated.`, 'SETTINGS', 'info')
+      return sendJson(res, 200, { ok: true, provider, persisted: saved })
+    } catch (err) {
+      logger.error(`/api/keys error: ${err.message}`)
       return sendJson(res, 200, { ok: false, error: err.message })
     }
   }
